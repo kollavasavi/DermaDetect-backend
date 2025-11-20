@@ -1,0 +1,81 @@
+{
+  "name": "DermaDetect - Skin Disease Detection & Analysis",
+  "short_name": "DermaDetect",
+  "description": "AI-powered skin disease detection with personalized medical advice using machine learning.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#4f46e5",
+  "background_color": "#ffffff",
+  "lang": "en-US",
+  "dir": "ltr",
+
+  "icons": [
+    {
+      "src": "/android-chrome-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/android-chrome-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/android-chrome-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/android-chrome-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+
+  "shortcuts": [
+    {
+      "name": "Upload Image",
+      "short_name": "Upload",
+      "description": "Quickly upload a skin image for analysis",
+      "url": "/form",
+      "icons": [{ "src": "/android-chrome-192x192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "View History",
+      "short_name": "History",
+      "description": "View past analysis results",
+      "url": "/history",
+      "icons": [{ "src": "/android-chrome-192x192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Performance",
+      "short_name": "Stats",
+      "description": "View model performance metrics",
+      "url": "/performance",
+      "icons": [{ "src": "/android-chrome-192x192.png", "sizes": "192x192" }]
+    }
+  ],
+
+  "share_target": {
+    "action": "/form",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "files": [
+        {
+          "name": "image",
+          "accept": ["image/*"]
+        }
+      ]
+    }
+  },
+
+  "categories": ["medical", "health", "lifestyle"],
+  "screenshots": []
+}
