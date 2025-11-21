@@ -1,4 +1,4 @@
-// server.js - FIXED: Properly serve React app through ngrok
+// server.js - UPDATED with TinyLlama API Integration
 
 const express = require('express');
 const mongoose = require('mongoose');
@@ -7,6 +7,7 @@ const dotenv = require('dotenv');
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
+const axios = require("axios");
 
 dotenv.config();
 const app = express();
@@ -21,11 +22,34 @@ const MONGODB_URI = process.env.MONGODB_URI || "mongodb://localhost:27017/skinDi
 const FRONTEND_URL = process.env.FRONTEND_URL || '*';
 
 // =======================================================
-// 2️⃣ Middleware - FIXED ORDER
+// 🔥 HuggingFace TinyLlama API
 // =======================================================
-// CORS must be first
-app.use(cors({ 
-  origin: '*',  // Allow all origins for ngrok
+async function queryTinyLlama(prompt) {
+  const HF_TOKEN = process.env.HF_TOKEN;
+
+  if (!HF_TOKEN) {
+    console.error("❌ ERROR: HF_TOKEN missing in Railway Variables");
+    throw new Error("HF_TOKEN is not set");
+  }
+
+  const response = await axios.post(
+    "https://api-inference.huggingface.co/models/TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+    { inputs: prompt },
+    {
+      headers: {
+        Authorization: `Bearer ${HF_TOKEN}`,
+      },
+    }
+  );
+
+  return response.data;
+}
+
+// =======================================================
+// 2️⃣ Middleware
+// =======================================================
+app.use(cors({
+  origin: '*',
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
@@ -41,7 +65,7 @@ app.use((req, res, next) => {
 });
 
 // =======================================================
-// 3️⃣ MongoDB
+// 3️⃣ MongoDB Connection
 // =======================================================
 mongoose
   .connect(MONGODB_URI)
@@ -49,19 +73,18 @@ mongoose
   .catch((err) => console.error("❌ MongoDB Error:", err.message));
 
 // =======================================================
-// 4️⃣ API Routes FIRST (before static files)
+// 4️⃣ API Routes
 // =======================================================
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/user', require('./routes/user'));
 app.use('/api/predict', require('./routes/predict'));
 app.use('/api/performance', require('./routes/performance'));
 
-// LLM routes
 const llmRouter = require('./routes/llm');
 app.use('/api/llm', llmRouter);
 app.use('/llm', llmRouter);
 
-// Health check
+// HEALTH CHECK
 app.get('/api/health', (req, res) => {
   res.json({
     status: "OK",
@@ -71,51 +94,58 @@ app.get('/api/health', (req, res) => {
 });
 
 // =======================================================
-// 5️⃣ Serve React Frontend - AFTER API routes
+// 🔥 5️⃣ TinyLlama API Route
+// =======================================================
+app.post("/api/ask-llama", async (req, res) => {
+  try {
+    const { prompt } = req.body;
+
+    if (!prompt) {
+      return res.status(400).json({ error: "Prompt is required" });
+    }
+
+    const llamaResponse = await queryTinyLlama(prompt);
+
+    res.json({ response: llamaResponse });
+
+  } catch (err) {
+    console.error("❌ TinyLlama Error:", err.response?.data || err.message);
+    res.status(500).json({ error: "Failed to contact TinyLlama API" });
+  }
+});
+
+// =======================================================
+// 6️⃣ Serve React Frontend Build (Optional)
 // =======================================================
 const buildPath = path.join(__dirname, 'frontend', 'build');
 
 if (fs.existsSync(buildPath)) {
   console.log("📦 Serving React frontend from:", buildPath);
 
-  // Serve static files
   app.use(express.static(buildPath, {
     maxAge: '1d',
     etag: true
   }));
 
-  // Handle React Router - MUST be last
   app.get('*', (req, res) => {
-    // Don't serve index.html for API routes
     if (req.path.startsWith('/api') || req.path.startsWith('/llm')) {
       return res.status(404).json({ error: 'API endpoint not found' });
     }
-    
     res.sendFile(path.join(buildPath, 'index.html'));
   });
+
 } else {
-  console.log("⚠️ Frontend build NOT found at:", buildPath);
-  console.log("Run: cd frontend && npm run build");
-  
-  // Fallback message
+  console.log("⚠️ Frontend build NOT found");
   app.get('*', (req, res) => {
     if (req.path.startsWith('/api') || req.path.startsWith('/llm')) {
       return res.status(404).json({ error: 'API endpoint not found' });
     }
-    res.status(503).send(`
-      <html>
-        <body style="font-family: Arial; padding: 40px; text-align: center;">
-          <h1>🚧 Frontend Not Built</h1>
-          <p>Please build the frontend first:</p>
-          <code>cd frontend && npm run build</code>
-        </body>
-      </html>
-    `);
+    res.status(503).send("Frontend not built");
   });
 }
 
 // =======================================================
-// 6️⃣ Start Server
+// 7️⃣ Start Server
 // =======================================================
 app.listen(PORT, HOST, () => {
   console.log(`\n🚀 Server running at http://localhost:${PORT}`);
@@ -128,8 +158,7 @@ app.listen(PORT, HOST, () => {
       }
     }
   }
-  console.log("\n✅ Ready for ngrok: ngrok http 5000");
-  console.log("⏳ Waiting for requests...\n");
+  console.log("\n⏳ Waiting for requests...\n");
 });
 
 module.exports = app;
