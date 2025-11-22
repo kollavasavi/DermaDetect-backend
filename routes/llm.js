@@ -19,7 +19,7 @@ console.log('  Available env vars:', Object.keys(process.env).filter(k =>
 ).join(', '));
 console.log('========================================');
 
-const HF_MODEL_URL = process.env.ML_MODEL_URL || 'https://api-inference.huggingface.co/models/TinyLlama/TinyLlama-1.1B-Chat-v1.0';
+const HF_MODEL_URL = process.env.ML_MODEL_URL || 'https://api-inference.huggingface.co/models/google/flan-t5-base';
 
 // 🔥 CRITICAL DEBUG: Log the actual model URL being used
 console.log('🔥🔥🔥 ACTUAL MODEL URL BEING USED:', HF_MODEL_URL);
@@ -508,3 +508,4 @@ router.get('/debug', async (req, res) => {
 });
 
 module.exports = router;
+
