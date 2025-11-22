@@ -19,7 +19,8 @@ console.log('  Available env vars:', Object.keys(process.env).filter(k =>
 ).join(', '));
 console.log('========================================');
 
-const HF_MODEL_URL = process.env.ML_MODEL_URL || 'https://api-inference.huggingface.co/models/google/flan-t5-base';
+// ✅ FIXED: Changed default from flan-t5-base to gpt2 (more reliable, no 410 errors!)
+const HF_MODEL_URL = process.env.ML_MODEL_URL || 'https://api-inference.huggingface.co/models/gpt2';
 
 // 🔥 CRITICAL DEBUG: Log the actual model URL being used
 console.log('🔥🔥🔥 ACTUAL MODEL URL BEING USED:', HF_MODEL_URL);
@@ -171,7 +172,7 @@ async function generateWithHuggingFace(disease, symptoms, severity, duration, co
   try {
     const prompt = createMedicalPrompt(disease, symptoms, severity, duration, confidence);
     
-    console.log(`🤖 Generating advice with Hugging Face TinyLlama...`);
+    console.log(`🤖 Generating advice with Hugging Face (using ${HF_MODEL_URL.split('/').pop()})...`);
     console.log(`⏱️ Timeout set to ${GENERATION_TIMEOUT/1000} seconds`);
 
     const response = await axios.post(
@@ -355,7 +356,7 @@ async function adviceHandler(req, res) {
       advice,
       metadata: {
         llm_service: USE_OPENAI ? 'OpenAI' : 'Hugging Face',
-        model: USE_OPENAI ? 'gpt-3.5-turbo' : 'TinyLlama-1.1B',
+        model: USE_OPENAI ? 'gpt-3.5-turbo' : HF_MODEL_URL.split('/').pop(),
         generation_time_ms: generationTime,
         generated_at: new Date().toISOString()
       }
@@ -470,7 +471,7 @@ router.get('/debug', async (req, res) => {
           advice_preview: advice.substring(0, 300) + '...',
           full_advice: advice,
           service: USE_OPENAI ? 'OpenAI' : 'Hugging Face',
-          model: USE_OPENAI ? 'gpt-3.5-turbo' : 'TinyLlama',
+          model: USE_OPENAI ? 'gpt-3.5-turbo' : HF_MODEL_URL.split('/').pop(),
           environment_debug: envDebug
         });
       } catch (err) {
@@ -508,4 +509,3 @@ router.get('/debug', async (req, res) => {
 });
 
 module.exports = router;
-
