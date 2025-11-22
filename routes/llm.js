@@ -1,4 +1,4 @@
-// routes/llm.js - Hugging Face Integration
+// routes/llm.js - Hugging Face Integration with Debug Logging
 const express = require('express');
 const router = express.Router();
 const axios = require('axios');
@@ -7,6 +7,18 @@ const authMiddleware = require('../middleware/auth');
 
 // Configuration - USE HUGGING FACE
 const HF_TOKEN = process.env.HF_TOKEN;
+
+// 🔍 DEBUG: Log environment variable status on startup
+console.log('🔍 ========== ENVIRONMENT DEBUG ==========');
+console.log('  HF_TOKEN exists:', !!HF_TOKEN);
+console.log('  HF_TOKEN length:', HF_TOKEN ? HF_TOKEN.length : 0);
+console.log('  HF_TOKEN starts with hf_:', HF_TOKEN ? HF_TOKEN.startsWith('hf_') : false);
+console.log('  NODE_ENV:', process.env.NODE_ENV);
+console.log('  Available env vars:', Object.keys(process.env).filter(k => 
+  k.includes('HF') || k.includes('TOKEN') || k.includes('ML')
+).join(', '));
+console.log('========================================');
+
 const HF_MODEL_URL = process.env.ML_MODEL_URL || 'https://api-inference.huggingface.co/models/TinyLlama/TinyLlama-1.1B-Chat-v1.0';
 const USE_OPENAI = process.env.USE_OPENAI === 'true';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -22,9 +34,12 @@ let lastHealthCheck = null;
 async function checkHuggingFaceHealth() {
   if (!HF_TOKEN) {
     console.log('⚠️ HF_TOKEN not set in environment variables');
+    console.log('⚠️ Please check Railway Variables tab and ensure HF_TOKEN is set');
     hfAvailable = false;
     return false;
   }
+
+  console.log('✅ HF_TOKEN is present, checking API connectivity...');
 
   try {
     // Test the API with a simple request
@@ -53,12 +68,14 @@ async function checkHuggingFaceHealth() {
     }
     
     hfAvailable = false;
+    console.log('⚠️ Hugging Face API returned unexpected status:', response.status);
     return false;
   } catch (error) {
     hfAvailable = false;
     
     if (error.response?.status === 401) {
       console.log('⚠️ Invalid HF_TOKEN - check your Hugging Face token');
+      console.log('⚠️ Token used starts with:', HF_TOKEN.substring(0, 7) + '...');
     } else if (error.code === 'ETIMEDOUT') {
       console.log('⚠️ Hugging Face API timeout');
     } else {
@@ -70,6 +87,7 @@ async function checkHuggingFaceHealth() {
 }
 
 // Initialize health check on startup
+console.log('🚀 Initializing Hugging Face health check...');
 checkHuggingFaceHealth();
 
 // Generate advice using LLM
@@ -86,7 +104,7 @@ async function generateAdviceWithLLM(disease, symptoms, severity, duration, conf
   
   // No LLM available
   throw new Error(
-    `No LLM service available. Please set HF_TOKEN in Railway environment variables.`
+    `No LLM service available. HF_TOKEN is ${HF_TOKEN ? 'set but API unavailable' : 'not set in Railway variables'}.`
   );
 }
 
@@ -290,6 +308,7 @@ async function adviceHandler(req, res) {
         message: 'LLM service not available',
         details: {
           hf_token_set: !!HF_TOKEN,
+          hf_token_valid: HF_TOKEN ? HF_TOKEN.startsWith('hf_') : false,
           hf_model_url: HF_MODEL_URL,
           instructions: [
             '1. Get Hugging Face token from https://huggingface.co/settings/tokens',
@@ -380,6 +399,7 @@ router.get('/health', async (req, res) => {
         available: isHealthy,
         model_url: HF_MODEL_URL,
         token_set: !!HF_TOKEN,
+        token_valid: HF_TOKEN ? HF_TOKEN.startsWith('hf_') : false,
         last_check: lastHealthCheck?.toISOString() || null
       },
       openai: {
@@ -393,7 +413,7 @@ router.get('/health', async (req, res) => {
 });
 
 // @route   GET /api/llm/debug
-// @desc    Debug endpoint
+// @desc    Debug endpoint - shows detailed environment info
 // @access  Public
 router.get('/debug', async (req, res) => {
   try {
@@ -404,6 +424,23 @@ router.get('/debug', async (req, res) => {
       duration: '2 months',
       confidence: 0.78
     };
+
+    // Environment debug info
+    const envDebug = {
+      hf_token_set: !!HF_TOKEN,
+      hf_token_length: HF_TOKEN ? HF_TOKEN.length : 0,
+      hf_token_valid_format: HF_TOKEN ? HF_TOKEN.startsWith('hf_') : false,
+      hf_token_preview: HF_TOKEN ? HF_TOKEN.substring(0, 7) + '...' : 'NOT SET',
+      ml_model_url: HF_MODEL_URL,
+      openai_configured: !!OPENAI_API_KEY,
+      use_openai: USE_OPENAI,
+      node_env: process.env.NODE_ENV,
+      env_vars_with_token: Object.keys(process.env).filter(k => 
+        k.includes('HF') || k.includes('TOKEN') || k.includes('ML')
+      )
+    };
+
+    console.log('🔍 Debug endpoint called - Environment info:', envDebug);
 
     const isHealthy = await checkHuggingFaceHealth();
     
@@ -428,7 +465,8 @@ router.get('/debug', async (req, res) => {
           advice_preview: advice.substring(0, 300) + '...',
           full_advice: advice,
           service: USE_OPENAI ? 'OpenAI' : 'Hugging Face',
-          model: USE_OPENAI ? 'gpt-3.5-turbo' : 'TinyLlama'
+          model: USE_OPENAI ? 'gpt-3.5-turbo' : 'TinyLlama',
+          environment_debug: envDebug
         });
       } catch (err) {
         console.error('Debug generation failed:', err.message);
@@ -436,7 +474,8 @@ router.get('/debug', async (req, res) => {
           success: false,
           message: 'LLM service available but generation failed',
           error: err.message,
-          sample_data: sample
+          sample_data: sample,
+          environment_debug: envDebug
         });
       }
     }
@@ -444,13 +483,13 @@ router.get('/debug', async (req, res) => {
     res.json({ 
       success: false,
       message: 'No LLM service available',
-      hf_token_set: !!HF_TOKEN,
-      hf_available: isHealthy,
-      openai_configured: !!OPENAI_API_KEY,
+      environment_debug: envDebug,
       instructions: [
-        '1. Set HF_TOKEN in Railway variables',
-        '2. Get token from https://huggingface.co/settings/tokens',
-        '3. Restart backend'
+        '1. Check if HF_TOKEN is set in Railway Variables tab',
+        '2. Ensure token starts with "hf_" and is from https://huggingface.co/settings/tokens',
+        '3. Delete and re-add the variable in Railway if needed',
+        '4. Restart backend service',
+        '5. Check logs for "✅ Hugging Face API is available"'
       ]
     });
     
