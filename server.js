@@ -5,8 +5,6 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const os = require('os');
-const fs = require('fs');
-const path = require('path');
 const axios = require("axios");
 
 dotenv.config();
@@ -115,34 +113,27 @@ app.post("/api/ask-llama", async (req, res) => {
 });
 
 // =======================================================
-// 6️⃣ Serve React Frontend Build (Optional)
+// 6️⃣ Backend is API-only (Frontend deployed on Vercel)
 // =======================================================
-const buildPath = path.join(__dirname, 'frontend', 'build');
+console.log("🚀 Backend running in API-only mode");
+console.log("🌐 Frontend deployed separately on Vercel");
 
-if (fs.existsSync(buildPath)) {
-  console.log("📦 Serving React frontend from:", buildPath);
-
-  app.use(express.static(buildPath, {
-    maxAge: '1d',
-    etag: true
-  }));
-
-  app.get('*', (req, res) => {
-    if (req.path.startsWith('/api') || req.path.startsWith('/llm')) {
-      return res.status(404).json({ error: 'API endpoint not found' });
-    }
-    res.sendFile(path.join(buildPath, 'index.html'));
+// Catch-all for undefined routes - return 404 JSON
+app.use('*', (req, res) => {
+  res.status(404).json({ 
+    error: 'Route not found',
+    message: 'This is an API-only backend. Frontend is on Vercel.',
+    availableRoutes: [
+      '/api/auth/signup',
+      '/api/auth/login',
+      '/api/health',
+      '/api/user',
+      '/api/predict',
+      '/api/llm',
+      '/api/ask-llama'
+    ]
   });
-
-} else {
-  console.log("⚠️ Frontend build NOT found");
-  app.get('*', (req, res) => {
-    if (req.path.startsWith('/api') || req.path.startsWith('/llm')) {
-      return res.status(404).json({ error: 'API endpoint not found' });
-    }
-    res.status(503).send("Frontend not built");
-  });
-}
+});
 
 // =======================================================
 // 7️⃣ Start Server
