@@ -20,6 +20,11 @@ console.log('  Available env vars:', Object.keys(process.env).filter(k =>
 console.log('========================================');
 
 const HF_MODEL_URL = process.env.ML_MODEL_URL || 'https://api-inference.huggingface.co/models/TinyLlama/TinyLlama-1.1B-Chat-v1.0';
+
+// 🔥 CRITICAL DEBUG: Log the actual model URL being used
+console.log('🔥🔥🔥 ACTUAL MODEL URL BEING USED:', HF_MODEL_URL);
+console.log('🔥🔥🔥 ML_MODEL_URL from env:', process.env.ML_MODEL_URL);
+
 const USE_OPENAI = process.env.USE_OPENAI === 'true';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
