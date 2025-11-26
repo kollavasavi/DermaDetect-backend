@@ -354,3 +354,4 @@ if (Prediction && authMiddleware) {
 }
 
 module.exports = router;
+
