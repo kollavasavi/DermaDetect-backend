@@ -1,8 +1,7 @@
-// server.js – FINAL CLEAN VERSION USING TINYLLAMA HF SPACE
+// server.js – FINAL FIXED VERSION
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const os = require('os');
 
 // Load .env ONLY in local development
 if (process.env.NODE_ENV !== 'production') {
@@ -28,10 +27,10 @@ console.log("========================");
 // =======================================================
 app.use(cors({ origin: '*', credentials: true }));
 app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 app.use((req, res, next) => {
-  console.log(`➡️ ${req.method} ${req.path}`);  // ✅ FIXED - Added opening (
+  console.log(`➡️ ${req.method} ${req.path}`);
   next();
 });
 
@@ -45,13 +44,41 @@ mongoose.connect(MONGODB_URI)
 // =======================================================
 // Routes
 // =======================================================
-app.use('/api/auth', require('./routes/auth'));
-app.use('/api/user', require('./routes/user'));
-app.use('/api/predict', require('./routes/predict'));
-app.use('/api/performance', require('./routes/performance'));
+try {
+  app.use('/api/auth', require('./routes/auth'));
+  console.log('✅ Auth routes loaded');
+} catch (err) {
+  console.error('❌ Auth routes error:', err.message);
+}
 
-const llmRoutes = require('./routes/llm');
-app.use('/api/llm', llmRoutes);
+try {
+  app.use('/api/user', require('./routes/user'));
+  console.log('✅ User routes loaded');
+} catch (err) {
+  console.error('❌ User routes error:', err.message);
+}
+
+try {
+  app.use('/api/predict', require('./routes/predict'));
+  console.log('✅ Predict routes loaded');
+} catch (err) {
+  console.error('❌ Predict routes error:', err.message);
+}
+
+try {
+  app.use('/api/performance', require('./routes/performance'));
+  console.log('✅ Performance routes loaded');
+} catch (err) {
+  console.error('❌ Performance routes error:', err.message);
+}
+
+try {
+  const llmRoutes = require('./routes/llm');
+  app.use('/api/llm', llmRoutes);
+  console.log('✅ LLM routes loaded');
+} catch (err) {
+  console.error('❌ LLM routes error:', err.message);
+}
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -60,6 +87,15 @@ app.get('/api/health', (req, res) => {
     mongo: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected",
     llm_configured: !!process.env.LLM_URL,
     ml_configured: !!process.env.PREDICTION_MODEL_URL
+  });
+});
+
+// Root
+app.get('/', (req, res) => {
+  res.json({
+    success: true,
+    message: 'DermaDetect API',
+    version: '1.0.0'
   });
 });
 
@@ -75,7 +111,8 @@ app.use('*', (req, res) => {
 // Start Server
 // =======================================================
 app.listen(PORT, HOST, () => {
-  console.log(`🚀 Server started at http://localhost:${PORT}`);  // ✅ FIXED - Added opening (
+  console.log(`🚀 Server started at http://localhost:${PORT}`);
+  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
 });
 
 module.exports = app;
