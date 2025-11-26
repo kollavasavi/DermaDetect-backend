@@ -59,7 +59,7 @@ async function callTinyLlama(prompt) {
       { text: prompt, wait_for_model: true },
       {
         headers: { "Content-Type": "application/json" },
-        timeout: 120000, // <-- 2 MINUTES
+        timeout: 300000, // <-- 2 MINUTES
       }
     );
 
@@ -170,3 +170,4 @@ router.get("/health", (req, res) => {
 });
 
 module.exports = router;
+
