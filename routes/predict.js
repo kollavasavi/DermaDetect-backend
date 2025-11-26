@@ -100,7 +100,6 @@ router.get('/test-ml', async (req, res) => {
   }
 
   try {
-    // Try the health endpoint first
     let testUrl = ML_MODEL_URL;
     if (!testUrl.includes('/predict')) {
       testUrl += '/predict';
@@ -141,7 +140,6 @@ router.post('/', optionalAuth, upload.single('image'), async (req, res) => {
 
     console.log('📋 File:', req.file.originalname, `${(req.file.size / 1024).toFixed(2)}KB`);
 
-    // Check ML URL
     if (!ML_MODEL_URL) {
       return res.status(500).json({
         success: false,
@@ -149,7 +147,6 @@ router.post('/', optionalAuth, upload.single('image'), async (req, res) => {
       });
     }
 
-    // Build correct URL
     let predictionUrl = ML_MODEL_URL;
     if (!predictionUrl.includes('/predict')) {
       predictionUrl += '/predict';
@@ -157,14 +154,12 @@ router.post('/', optionalAuth, upload.single('image'), async (req, res) => {
 
     console.log('🚀 Sending to:', predictionUrl);
 
-    // Prepare form data
     const formData = new FormData();
     formData.append('file', req.file.buffer, {
       filename: req.file.originalname,
       contentType: req.file.mimetype
     });
 
-    // Send to ML model
     let response;
     try {
       response = await axios.post(predictionUrl, formData, {
@@ -205,7 +200,6 @@ router.post('/', optionalAuth, upload.single('image'), async (req, res) => {
 
     console.log('✅ ML Response:', JSON.stringify(response.data).substring(0, 200));
 
-    // Extract prediction
     let disease = response.data.predicted_class || 
                   response.data.prediction || 
                   response.data.disease ||
@@ -224,7 +218,6 @@ router.post('/', optionalAuth, upload.single('image'), async (req, res) => {
     disease = disease.trim();
     console.log(`🔍 Result: "${disease}" (${(confidence * 100).toFixed(1)}%)`);
 
-    // Validate confidence
     if (confidence < CONFIDENCE_THRESHOLD) {
       console.warn(`⚠️ Low confidence: ${(confidence * 100).toFixed(1)}%`);
       return res.status(200).json({
@@ -236,7 +229,6 @@ router.post('/', optionalAuth, upload.single('image'), async (req, res) => {
       });
     }
 
-    // Validate disease class
     if (!isValidDisease(disease)) {
       console.warn(`⚠️ Invalid disease: "${disease}"`);
       return res.status(200).json({
@@ -248,10 +240,8 @@ router.post('/', optionalAuth, upload.single('image'), async (req, res) => {
       });
     }
 
-    // Determine severity
     const severity = determineSeverity(confidence);
 
-    // Save to DB (if available)
     let predictionId = null;
     if (Prediction && req.user && req.user._id !== 'guest') {
       try {
@@ -264,7 +254,7 @@ router.post('/', optionalAuth, upload.single('image'), async (req, res) => {
           metadata: {
             symptoms: req.body.symptoms || "",
             duration: req.body.duration || "",
-            spreading: req.body.spreading === 'true',
+            spreading: req.body.spreading === 'true'
           }
         });
 
@@ -276,7 +266,6 @@ router.post('/', optionalAuth, upload.single('image'), async (req, res) => {
       }
     }
 
-    // Return success
     res.json({
       success: true,
       prediction: disease,
@@ -305,7 +294,7 @@ router.post('/', optionalAuth, upload.single('image'), async (req, res) => {
 });
 
 // ============================================================
-// HISTORY ROUTES (if models exist)
+// HISTORY ROUTES
 // ============================================================
 if (Prediction && authMiddleware) {
   router.get('/history', authMiddleware, async (req, res) => {
@@ -381,19 +370,3 @@ if (Prediction && authMiddleware) {
 }
 
 module.exports = router;
-```
-
-## Key Fixes:
-
-1. **✅ Handles ML URL correctly** - Adds `/predict` if missing
-2. **✅ Better error messages** - Shows exactly what failed
-3. **✅ HuggingFace Space handling** - Detects when space is sleeping
-4. **✅ Works without auth** - For testing
-5. **✅ Confidence threshold** - Rejects low predictions
-6. **✅ Disease validation** - Only allows trained classes
-
-## Next Steps:
-
-1. **Update Railway Variable:**
-```
-   PREDICTION_MODEL_URL=https://vasavi07-dermadetect-ml-model.hf.space
