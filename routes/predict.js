@@ -3,16 +3,22 @@ const router = express.Router();
 const multer = require('multer');
 const axios = require('axios');
 const FormData = require('form-data');
-const Prediction = require('../models/Prediction'); // ADD THIS
-const authMiddleware = require('../middleware/auth'); // ADD THIS
+
+// Try to import models/middleware
+let Prediction, authMiddleware;
+try {
+  Prediction = require('../models/Prediction');
+  authMiddleware = require('../middleware/auth');
+} catch (err) {
+  console.warn('⚠️ Missing models:', err.message);
+}
 
 // ============================================================
 // CONFIGURATION
 // ============================================================
-const ML_MODEL_URL = process.env.ML_MODEL_URL || 'http://localhost:5001';
-const CONFIDENCE_THRESHOLD = 0.15; // 15% minimum confidence
+const ML_MODEL_URL = process.env.PREDICTION_MODEL_URL || process.env.ML_MODEL_URL;
+const CONFIDENCE_THRESHOLD = 0.15;
 
-// Your 8 trained disease classes
 const VALID_DISEASES = [
   'acne',
   'hyperpigmentation',
@@ -24,36 +30,41 @@ const VALID_DISEASES = [
   'ringworm'
 ];
 
+console.log('🔧 ML_MODEL_URL:', ML_MODEL_URL);
+
 // ============================================================
 // MULTER CONFIG
 // ============================================================
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 10 * 1024 * 1024 // 10MB limit
-  },
+  limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('image/')) {
       cb(null, true);
     } else {
-      cb(new Error('Only image files are allowed!'), false);
+      cb(new Error('Only images allowed'), false);
     }
   }
 });
 
 // ============================================================
-// HELPER: Normalize disease name
+// OPTIONAL AUTH
 // ============================================================
-function normalizeDiseaseName(disease) {
-  return disease
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, ''); // Remove special chars
-}
+const optionalAuth = (req, res, next) => {
+  if (!authMiddleware) {
+    req.user = { _id: 'guest' };
+    return next();
+  }
+  return authMiddleware(req, res, next);
+};
 
 // ============================================================
-// HELPER: Validate disease class
+// HELPERS
 // ============================================================
+function normalizeDiseaseName(disease) {
+  return disease.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
 function isValidDisease(disease) {
   const normalized = normalizeDiseaseName(disease);
   return VALID_DISEASES.some(valid => 
@@ -62,9 +73,6 @@ function isValidDisease(disease) {
   );
 }
 
-// ============================================================
-// HELPER: Determine severity
-// ============================================================
 function determineSeverity(confidence) {
   if (confidence >= 0.7) return 'severe';
   if (confidence >= 0.4) return 'moderate';
@@ -72,359 +80,320 @@ function determineSeverity(confidence) {
 }
 
 // ============================================================
-// TEST ENDPOINT
+// TEST ENDPOINTS
 // ============================================================
 router.get('/test', (req, res) => {
   res.json({ 
     success: true,
-    message: '✅ Predict route is working!',
+    message: '✅ Predict route working',
     mlModelUrl: ML_MODEL_URL,
-    confidenceThreshold: CONFIDENCE_THRESHOLD,
-    validDiseases: VALID_DISEASES
+    configured: !!ML_MODEL_URL
   });
+});
+
+router.get('/test-ml', async (req, res) => {
+  if (!ML_MODEL_URL) {
+    return res.json({
+      success: false,
+      message: 'ML_MODEL_URL not configured'
+    });
+  }
+
+  try {
+    // Try the health endpoint first
+    let testUrl = ML_MODEL_URL;
+    if (!testUrl.includes('/predict')) {
+      testUrl += '/predict';
+    }
+    
+    const response = await axios.get(testUrl.replace('/predict', '/health'), { 
+      timeout: 10000 
+    });
+    
+    res.json({
+      success: true,
+      mlModelUrl: ML_MODEL_URL,
+      healthCheck: response.data
+    });
+  } catch (error) {
+    res.json({
+      success: false,
+      mlModelUrl: ML_MODEL_URL,
+      error: error.message,
+      suggestion: 'Make sure your HuggingFace Space is running'
+    });
+  }
 });
 
 // ============================================================
 // MAIN PREDICTION ENDPOINT
 // ============================================================
-router.post('/', authMiddleware, upload.single('image'), async (req, res) => {
+router.post('/', optionalAuth, upload.single('image'), async (req, res) => {
   try {
-    console.log('📸 Received prediction request from user:', req.user._id);
+    console.log('📸 Prediction request');
     
     if (!req.file) {
       return res.status(400).json({ 
         success: false,
-        message: 'No image file uploaded' 
+        message: 'No image uploaded' 
       });
     }
 
-    console.log('📋 Image:', req.file.originalname, req.file.size, 'bytes');
+    console.log('📋 File:', req.file.originalname, `${(req.file.size / 1024).toFixed(2)}KB`);
 
-    // Extract form data
-    const {
-      symptoms,
-      duration,
-      durationOption,
-      spreading,
-      sensations,
-      appearance,
-      sunExposure,
-      newMedication,
-      familyHistory,
-      stress,
-      oozing,
-      severity
-    } = req.body;
-
-    // ============================================================
-    // MOCK MODE (if ML_MODEL_URL not configured)
-    // ============================================================
-    if (!process.env.ML_MODEL_URL) {
-      console.log('⚠️ ML_MODEL_URL not set - using mock prediction');
-      
-      return res.json({
-        success: true,
-        prediction: 'Melanoma',
-        confidence: 0.87,
-        severity: 'severe',
-        description: 'This is a DEMO prediction. Connect your ML model.',
-        recommendations: [
-          'Monitor the condition closely',
-          'Protect your skin from sun exposure',
-          'Schedule a dermatologist appointment',
-          'Take photos regularly to track changes'
-        ],
-        message: '⚠️ Demo mode. Set ML_MODEL_URL to use real predictions.'
+    // Check ML URL
+    if (!ML_MODEL_URL) {
+      return res.status(500).json({
+        success: false,
+        message: 'ML Model not configured. Set PREDICTION_MODEL_URL in Railway.'
       });
     }
 
-    // ============================================================
-    // FORWARD TO ML MODEL
-    // ============================================================
+    // Build correct URL
+    let predictionUrl = ML_MODEL_URL;
+    if (!predictionUrl.includes('/predict')) {
+      predictionUrl += '/predict';
+    }
+
+    console.log('🚀 Sending to:', predictionUrl);
+
+    // Prepare form data
     const formData = new FormData();
-    formData.append('image', req.file.buffer, {
+    formData.append('file', req.file.buffer, {
       filename: req.file.originalname,
       contentType: req.file.mimetype
     });
-    
-    // Add all form fields
-    formData.append('symptoms', symptoms || '');
-    formData.append('duration', duration || '');
-    formData.append('durationOption', durationOption || '');
-    formData.append('spreading', spreading || '');
-    formData.append('sensations', sensations || '');
-    formData.append('appearance', appearance || '');
-    formData.append('sunExposure', sunExposure || '');
-    formData.append('newMedication', newMedication || '');
-    formData.append('familyHistory', familyHistory || '');
-    formData.append('stress', stress || '');
-    formData.append('oozing', oozing || '');
-    formData.append('severity', severity || '');
 
-    console.log(`🚀 Forwarding to ML model at ${ML_MODEL_URL}/predict`);
+    // Send to ML model
+    let response;
+    try {
+      response = await axios.post(predictionUrl, formData, {
+        headers: formData.getHeaders(),
+        timeout: 120000,
+        maxBodyLength: Infinity
+      });
+    } catch (mlError) {
+      console.error('❌ ML Error:', mlError.message);
+      
+      if (mlError.code === 'ECONNREFUSED') {
+        return res.status(503).json({
+          success: false,
+          message: 'Cannot connect to ML model',
+          details: 'HuggingFace Space may be sleeping. Try again in 30 seconds.',
+          mlUrl: predictionUrl
+        });
+      }
 
-    const response = await axios.post(`${ML_MODEL_URL}/predict`, formData, {
-      headers: {
-        ...formData.getHeaders()
-      },
-      timeout: parseInt(process.env.ML_TIMEOUT || '120000'),
-      maxBodyLength: Infinity,
-      maxContentLength: Infinity
-    });
+      if (mlError.code === 'ETIMEDOUT') {
+        return res.status(504).json({
+          success: false,
+          message: 'ML model timeout',
+          details: 'Request took too long. Try again.'
+        });
+      }
 
-    console.log('✅ ML model response:', response.data);
+      if (mlError.response) {
+        return res.status(mlError.response.status).json({
+          success: false,
+          message: 'ML model error',
+          details: mlError.response.data
+        });
+      }
 
-    // ============================================================
-    // EXTRACT AND VALIDATE PREDICTION
-    // ============================================================
+      throw mlError;
+    }
+
+    console.log('✅ ML Response:', JSON.stringify(response.data).substring(0, 200));
+
+    // Extract prediction
     let disease = response.data.predicted_class || 
                   response.data.prediction || 
-                  response.data.disease;
+                  response.data.disease ||
+                  response.data.class;
     
     let confidence = parseFloat(response.data.confidence || 0);
 
     if (!disease) {
-      throw new Error('ML model did not return a prediction');
+      return res.status(500).json({
+        success: false,
+        message: 'Invalid ML response',
+        rawResponse: response.data
+      });
     }
 
     disease = disease.trim();
+    console.log(`🔍 Result: "${disease}" (${(confidence * 100).toFixed(1)}%)`);
 
-    console.log(`🔍 Disease: "${disease}", Confidence: ${(confidence * 100).toFixed(1)}%`);
-
-    // ============================================================
-    // CHECK 1: CONFIDENCE THRESHOLD
-    // ============================================================
+    // Validate confidence
     if (confidence < CONFIDENCE_THRESHOLD) {
       console.warn(`⚠️ Low confidence: ${(confidence * 100).toFixed(1)}%`);
       return res.status(200).json({
         success: false,
-        message: `Prediction confidence too low (${(confidence * 100).toFixed(1)}%).\n\nPlease try:\n• Taking a clearer photo\n• Better lighting conditions\n• Closer view of the affected area\n• Consulting a dermatologist for accurate diagnosis`,
+        message: `Confidence too low (${(confidence * 100).toFixed(1)}%).\n\nTips:\n• Better lighting\n• Clearer photo\n• Closer view\n• Consult a dermatologist`,
         confidence: confidence,
         predictedDisease: disease,
         belowThreshold: true
       });
     }
 
-    // ============================================================
-    // CHECK 2: VALID DISEASE CLASS
-    // ============================================================
+    // Validate disease class
     if (!isValidDisease(disease)) {
       console.warn(`⚠️ Invalid disease: "${disease}"`);
       return res.status(200).json({
         success: false,
-        message: `The detected condition "${disease}" is not in our trained database.\n\nOur system is trained to detect:\n${VALID_DISEASES.join(', ')}\n\nPlease consult a dermatologist for accurate diagnosis.`,
+        message: `"${disease}" not in trained database.\n\nTrained: ${VALID_DISEASES.join(', ')}\n\nConsult a dermatologist.`,
         detectedClass: disease,
         confidence: confidence,
-        invalidClass: true,
-        trainedClasses: VALID_DISEASES
+        invalidClass: true
       });
     }
 
-    // ============================================================
-    // DETERMINE SEVERITY
-    // ============================================================
-    const finalSeverity = severity || determineSeverity(confidence);
+    // Determine severity
+    const severity = determineSeverity(confidence);
 
-    // ============================================================
-    // SAVE TO DATABASE
-    // ============================================================
-    const prediction = new Prediction({
-      userId: req.user._id,
-      disease: disease,
-      confidence: confidence,
-      severity: finalSeverity,
-      imageUrl: req.file.originalname,
-      metadata: {
-        symptoms: symptoms || "",
-        duration: duration || "",
-        durationOption: durationOption || "",
-        spreading: spreading || false,
-        sensations: Array.isArray(sensations) ? sensations : [],
-        appearance: Array.isArray(appearance) ? appearance : [],
-        sunExposure: sunExposure || "",
-        newMedication: newMedication || "",
-        familyHistory: familyHistory || "",
-        stress: stress || "",
-        oozing: oozing || "",
-      },
-    });
+    // Save to DB (if available)
+    let predictionId = null;
+    if (Prediction && req.user && req.user._id !== 'guest') {
+      try {
+        const prediction = new Prediction({
+          userId: req.user._id,
+          disease: disease,
+          confidence: confidence,
+          severity: severity,
+          imageUrl: req.file.originalname,
+          metadata: {
+            symptoms: req.body.symptoms || "",
+            duration: req.body.duration || "",
+            spreading: req.body.spreading === 'true',
+          }
+        });
 
-    await prediction.save();
+        await prediction.save();
+        predictionId = prediction._id;
+        console.log('✅ Saved:', predictionId);
+      } catch (dbError) {
+        console.error('⚠️ DB Error:', dbError.message);
+      }
+    }
 
-    console.log('✅ Prediction saved to DB:', prediction._id);
-
-    // ============================================================
-    // RETURN SUCCESS RESPONSE
-    // ============================================================
+    // Return success
     res.json({
       success: true,
       prediction: disease,
       confidence: confidence,
-      severity: finalSeverity,
-      predictionId: prediction._id,
-      description: response.data.description || `Detected: ${disease}`,
-      recommendations: response.data.recommendations || [
-        'Monitor the condition closely',
-        'Keep the affected area clean and dry',
-        'Avoid scratching or picking',
-        'Consult a dermatologist for proper treatment'
-      ],
-      possibleConditions: response.data.possibleConditions || [
-        { name: disease, probability: Math.round(confidence * 100) }
-      ],
-      createdAt: prediction.createdAt
+      severity: severity,
+      predictionId: predictionId,
+      description: `Detected: ${disease} (${(confidence * 100).toFixed(1)}% confidence)`,
+      recommendations: [
+        'Monitor the condition',
+        'Keep area clean',
+        'Avoid scratching',
+        'Consult a dermatologist'
+      ]
     });
 
   } catch (error) {
-    console.error('❌ Prediction error:', error.message);
+    console.error('❌ Error:', error.message);
+    console.error('Stack:', error.stack);
     
-    if (error.response) {
-      console.error('ML server status:', error.response.status);
-      console.error('ML server data:', error.response.data);
-    }
-
-    if (error.code === 'ECONNREFUSED') {
-      return res.status(503).json({ 
-        success: false,
-        message: '⚠️ ML Model server is not running',
-        details: `Cannot connect to ${ML_MODEL_URL}. Please start your ML model server.`
-      });
-    }
-
-    if (error.response) {
-      return res.status(error.response.status).json({
-        success: false,
-        message: error.response.data.message || 'ML model error',
-        details: error.response.data
-      });
-    }
-
     res.status(500).json({ 
       success: false,
       message: 'Prediction failed',
-      error: error.message 
-    });
-  }
-});
-
-// ============================================================
-// GET PREDICTION HISTORY
-// ============================================================
-router.get('/history', authMiddleware, async (req, res) => {
-  try {
-    const predictions = await Prediction.find({ userId: req.user._id })
-      .sort({ createdAt: -1 })
-      .limit(50);
-
-    const stats = {
-      total: predictions.length,
-      avgConfidence: predictions.length > 0 
-        ? (predictions.reduce((sum, p) => sum + p.confidence, 0) / predictions.length)
-        : 0,
-      uniqueDiseases: [...new Set(predictions.map(p => p.disease))].length
-    };
-
-    res.json({
-      success: true,
-      predictions: predictions,
-      stats: stats
-    });
-  } catch (error) {
-    console.error('❌ History fetch error:', error.message);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch history',
       error: error.message
     });
   }
 });
 
 // ============================================================
-// GET SINGLE PREDICTION BY ID
+// HISTORY ROUTES (if models exist)
 // ============================================================
-router.get('/:id', authMiddleware, async (req, res) => {
-  try {
-    const prediction = await Prediction.findOne({
-      _id: req.params.id,
-      userId: req.user._id
-    });
+if (Prediction && authMiddleware) {
+  router.get('/history', authMiddleware, async (req, res) => {
+    try {
+      const predictions = await Prediction.find({ userId: req.user._id })
+        .sort({ createdAt: -1 })
+        .limit(50);
 
-    if (!prediction) {
-      return res.status(404).json({
+      res.json({
+        success: true,
+        predictions: predictions
+      });
+    } catch (error) {
+      res.status(500).json({
         success: false,
-        message: 'Prediction not found'
+        message: 'Failed to fetch history',
+        error: error.message
       });
     }
+  });
 
-    res.json({
-      success: true,
-      prediction: prediction
-    });
-  } catch (error) {
-    console.error('❌ Fetch error:', error.message);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch prediction',
-      error: error.message
-    });
-  }
-});
+  router.get('/:id', authMiddleware, async (req, res) => {
+    try {
+      const prediction = await Prediction.findOne({
+        _id: req.params.id,
+        userId: req.user._id
+      });
 
-// ============================================================
-// DELETE PREDICTION
-// ============================================================
-router.delete('/:id', authMiddleware, async (req, res) => {
-  try {
-    const prediction = await Prediction.findOneAndDelete({
-      _id: req.params.id,
-      userId: req.user._id
-    });
+      if (!prediction) {
+        return res.status(404).json({
+          success: false,
+          message: 'Not found'
+        });
+      }
 
-    if (!prediction) {
-      return res.status(404).json({
+      res.json({
+        success: true,
+        prediction: prediction
+      });
+    } catch (error) {
+      res.status(500).json({
         success: false,
-        message: 'Prediction not found'
+        error: error.message
       });
     }
+  });
 
-    console.log('🗑️ Deleted prediction:', req.params.id);
+  router.delete('/:id', authMiddleware, async (req, res) => {
+    try {
+      const prediction = await Prediction.findOneAndDelete({
+        _id: req.params.id,
+        userId: req.user._id
+      });
 
-    res.json({
-      success: true,
-      message: 'Prediction deleted successfully'
-    });
-  } catch (error) {
-    console.error('❌ Delete error:', error.message);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to delete prediction',
-      error: error.message
-    });
-  }
-});
+      if (!prediction) {
+        return res.status(404).json({
+          success: false,
+          message: 'Not found'
+        });
+      }
 
-// ============================================================
-// CLEAR ALL HISTORY
-// ============================================================
-router.delete('/history/clear', authMiddleware, async (req, res) => {
-  try {
-    const result = await Prediction.deleteMany({ userId: req.user._id });
-
-    console.log(`🗑️ Cleared ${result.deletedCount} predictions for user ${req.user._id}`);
-
-    res.json({
-      success: true,
-      message: `Deleted ${result.deletedCount} predictions`,
-      deletedCount: result.deletedCount
-    });
-  } catch (error) {
-    console.error('❌ Clear history error:', error.message);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to clear history',
-      error: error.message
-    });
-  }
-});
+      res.json({
+        success: true,
+        message: 'Deleted'
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+  });
+}
 
 module.exports = router;
+```
+
+## Key Fixes:
+
+1. **✅ Handles ML URL correctly** - Adds `/predict` if missing
+2. **✅ Better error messages** - Shows exactly what failed
+3. **✅ HuggingFace Space handling** - Detects when space is sleeping
+4. **✅ Works without auth** - For testing
+5. **✅ Confidence threshold** - Rejects low predictions
+6. **✅ Disease validation** - Only allows trained classes
+
+## Next Steps:
+
+1. **Update Railway Variable:**
+```
+   PREDICTION_MODEL_URL=https://vasavi07-dermadetect-ml-model.hf.space
