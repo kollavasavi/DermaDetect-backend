@@ -144,6 +144,8 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
   }
 
   console.log('File received:', req.file.originalname);
+  console.log('File size:', req.file.size, 'bytes');
+  console.log('File type:', req.file.mimetype);
 
   if (!ML_MODEL_URL) {
     return res.status(500).json({
@@ -159,47 +161,52 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
 
   console.log('Sending to ML model:', predictionUrl);
 
-  // ✅ CRITICAL FIX: Changed 'file' to 'image' to match your ML model's expectations
+  // ✅ CRITICAL FIX: Create FormData with proper content type and file stream
   const formData = new FormData();
+  
+  // Append the file buffer directly with explicit options
   formData.append('image', req.file.buffer, {
     filename: req.file.originalname,
-    contentType: req.file.mimetype
+    contentType: req.file.mimetype,
+    knownLength: req.file.size
   });
 
-  // Optional: Add additional fields your ML model accepts
-  if (req.body.symptoms) {
-    formData.append('symptoms', req.body.symptoms);
-  }
-  if (req.body.duration) {
-    formData.append('duration', req.body.duration);
-  }
-  if (req.body.severity) {
-    formData.append('severity', req.body.severity);
-  }
+  // Get form headers (important for multipart/form-data)
+  const formHeaders = formData.getHeaders();
+  
+  console.log('Form headers:', formHeaders);
+  console.log('FormData boundary:', formHeaders['content-type']);
 
-  axios.post(predictionUrl, formData, {
-    headers: formData.getHeaders(),
+  axios({
+    method: 'post',
+    url: predictionUrl,
+    data: formData,
+    headers: {
+      ...formHeaders
+    },
     timeout: 120000,
     maxBodyLength: Infinity,
     maxContentLength: Infinity
   })
   .then(function(response) {
     console.log('ML Response received');
+    console.log('Response status:', response.status);
     console.log('Response data:', JSON.stringify(response.data));
 
     // Your ML model returns: { success: true, prediction: "Acne", confidence: 85.5, ... }
     let disease = response.data.prediction || response.data.predicted_class || response.data.disease || response.data.class;
     let confidence = parseFloat(response.data.confidence || 0);
 
-    // ✅ FIX: Your ML model returns confidence as percentage (0-100), convert to decimal (0-1)
+    // Convert confidence from percentage to decimal if needed
     if (confidence > 1) {
       confidence = confidence / 100;
     }
 
     if (!disease) {
+      console.error('No disease found in response:', response.data);
       return res.status(500).json({
         success: false,
-        message: 'Invalid ML response',
+        message: 'Invalid ML response - no disease prediction',
         rawResponse: response.data
       });
     }
@@ -254,7 +261,6 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
         });
     }
 
-    // ✅ Return response with all data from ML model
     return res.json({
       success: true,
       prediction: disease,
@@ -266,7 +272,7 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
         'Monitor the condition', 
         'Keep area clean', 
         'Avoid scratching', 
-        'Consult a dermatologist'
+        'Consult a dermatologist if symptoms persist'
       ],
       allPredictions: response.data.all_predictions || null,
       modelDetails: response.data.model_details || null
@@ -274,12 +280,18 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
   })
   .catch(function(mlError) {
     console.error('ML Error:', mlError.message);
+    console.error('ML Error Code:', mlError.code);
+    
+    if (mlError.response) {
+      console.error('ML Error Status:', mlError.response.status);
+      console.error('ML Error Data:', JSON.stringify(mlError.response.data));
+    }
     
     if (mlError.code === 'ECONNREFUSED') {
       return res.status(503).json({
         success: false,
         message: 'Cannot connect to ML model',
-        details: 'HuggingFace Space may be sleeping. Please visit the space URL to wake it up.'
+        details: 'HuggingFace Space may be sleeping. Please visit https://vasavi07-dermadetect-ml-model.hf.space to wake it up.'
       });
     }
 
@@ -292,11 +304,12 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
     }
 
     if (mlError.response) {
-      console.error('ML Error Response:', mlError.response.data);
       return res.status(mlError.response.status).json({
         success: false,
         message: 'ML model error',
-        details: mlError.response.data
+        statusCode: mlError.response.status,
+        details: mlError.response.data,
+        hint: mlError.response.status === 400 ? 'ML model rejected the request format' : null
       });
     }
 
