@@ -159,27 +159,48 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
 
   console.log('Sending to ML model:', predictionUrl);
 
+  // ✅ CRITICAL FIX: Changed 'file' to 'image' to match your ML model's expectations
   const formData = new FormData();
-  formData.append('file', req.file.buffer, {
+  formData.append('image', req.file.buffer, {
     filename: req.file.originalname,
     contentType: req.file.mimetype
   });
 
+  // Optional: Add additional fields your ML model accepts
+  if (req.body.symptoms) {
+    formData.append('symptoms', req.body.symptoms);
+  }
+  if (req.body.duration) {
+    formData.append('duration', req.body.duration);
+  }
+  if (req.body.severity) {
+    formData.append('severity', req.body.severity);
+  }
+
   axios.post(predictionUrl, formData, {
     headers: formData.getHeaders(),
     timeout: 120000,
-    maxBodyLength: Infinity
+    maxBodyLength: Infinity,
+    maxContentLength: Infinity
   })
   .then(function(response) {
     console.log('ML Response received');
+    console.log('Response data:', JSON.stringify(response.data));
 
-    let disease = response.data.predicted_class || response.data.prediction || response.data.disease || response.data.class;
+    // Your ML model returns: { success: true, prediction: "Acne", confidence: 85.5, ... }
+    let disease = response.data.prediction || response.data.predicted_class || response.data.disease || response.data.class;
     let confidence = parseFloat(response.data.confidence || 0);
+
+    // ✅ FIX: Your ML model returns confidence as percentage (0-100), convert to decimal (0-1)
+    if (confidence > 1) {
+      confidence = confidence / 100;
+    }
 
     if (!disease) {
       return res.status(500).json({
         success: false,
-        message: 'Invalid ML response'
+        message: 'Invalid ML response',
+        rawResponse: response.data
       });
     }
 
@@ -233,19 +254,22 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
         });
     }
 
+    // ✅ Return response with all data from ML model
     return res.json({
       success: true,
       prediction: disease,
       confidence: confidence,
       severity: severity,
       predictionId: predictionId,
-      description: 'Detected: ' + disease,
-      recommendations: [
+      description: response.data.description || 'Detected: ' + disease,
+      recommendations: response.data.recommendations || [
         'Monitor the condition', 
         'Keep area clean', 
         'Avoid scratching', 
         'Consult a dermatologist'
-      ]
+      ],
+      allPredictions: response.data.all_predictions || null,
+      modelDetails: response.data.model_details || null
     });
   })
   .catch(function(mlError) {
@@ -254,18 +278,21 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
     if (mlError.code === 'ECONNREFUSED') {
       return res.status(503).json({
         success: false,
-        message: 'Cannot connect to ML model'
+        message: 'Cannot connect to ML model',
+        details: 'HuggingFace Space may be sleeping. Please visit the space URL to wake it up.'
       });
     }
 
     if (mlError.code === 'ETIMEDOUT') {
       return res.status(504).json({
         success: false,
-        message: 'ML model timeout'
+        message: 'ML model timeout',
+        details: 'Request took longer than 2 minutes'
       });
     }
 
     if (mlError.response) {
+      console.error('ML Error Response:', mlError.response.data);
       return res.status(mlError.response.status).json({
         success: false,
         message: 'ML model error',
@@ -354,4 +381,3 @@ if (Prediction && authMiddleware) {
 }
 
 module.exports = router;
-
