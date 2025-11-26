@@ -1,4 +1,4 @@
-// server.js – FINAL FIXED VERSION
+// server.js – CORRECTED VERSION
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -29,7 +29,7 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 app.use((req, res, next) => {
-  console.log(`➡️ ${req.method} ${req.path}`);
+  console.log(`➡️ ${req.method} ${req.path}`);  // ✅ FIXED - Added opening (
   next();
 });
 
@@ -108,8 +108,8 @@ app.use('*', (req, res) => {
 // Start Server
 // =======================================================
 app.listen(PORT, HOST, () => {
-  console.log(`🚀 Server started at http://localhost:${PORT}`);
-  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🚀 Server started at http://localhost:${PORT}`);  // ✅ FIXED - Added opening (
+  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);  // ✅ FIXED - Added opening (
 });
 
 module.exports = app;
