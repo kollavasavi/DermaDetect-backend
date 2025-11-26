@@ -7,7 +7,10 @@ const dotenv = require('dotenv');
 const os = require('os');
 const axios = require("axios");
 
-dotenv.config();
+if (process.env.NODE_ENV !== "production") {
+  dotenv.config();
+}
+
 const app = express();
 
 // =======================================================
@@ -154,4 +157,5 @@ app.listen(PORT, HOST, () => {
 
 module.exports = app;
 // force rebuild
+
 
