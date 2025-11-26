@@ -100,6 +100,34 @@ router.get('/test', function(req, res) {
   });
 });
 
+// DEBUG: Test what the backend receives
+router.post('/test-upload', upload.single('image'), function(req, res) {
+  console.log('=== TEST UPLOAD DEBUG ===');
+  console.log('req.file:', req.file ? 'EXISTS' : 'NULL');
+  console.log('req.body:', JSON.stringify(req.body));
+  
+  if (req.file) {
+    console.log('File details:', {
+      fieldname: req.file.fieldname,
+      originalname: req.file.originalname,
+      mimetype: req.file.mimetype,
+      size: req.file.size
+    });
+  }
+  
+  return res.json({
+    success: true,
+    receivedFile: req.file ? true : false,
+    fileDetails: req.file ? {
+      fieldname: req.file.fieldname,
+      originalname: req.file.originalname,
+      mimetype: req.file.mimetype,
+      size: req.file.size
+    } : null,
+    bodyFields: Object.keys(req.body)
+  });
+});
+
 // ML test endpoint
 router.get('/test-ml', function(req, res) {
   if (!ML_MODEL_URL) {
