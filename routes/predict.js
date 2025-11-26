@@ -99,8 +99,8 @@ router.get('/test', function(req, res) {
   });
 });
 
-// Main prediction endpoint - SIMPLEST POSSIBLE APPROACH
-router.post('/', optionalAuth, upload.single('image'), function(req, res) {
+// Main prediction endpoint
+router.post('/', optionalAuth, upload.single('image'), async function(req, res) {
   console.log('=== PREDICTION REQUEST START ===');
   
   if (!req.file) {
@@ -123,55 +123,57 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
   }
 
   console.log('File:', req.file.originalname, '(' + req.file.size + ' bytes)');
+  console.log('MIME:', req.file.mimetype);
   console.log('URL:', predictionUrl);
 
-  // ✅ THE ABSOLUTE SIMPLEST WAY - Direct buffer append
-  // This is the most compatible way with Flask
-  const formData = new FormData();
-  formData.append('image', req.file.buffer, req.file.originalname);
+  try {
+    // ✅ THE CORRECT WAY - Append buffer with proper options for Flask
+    const formData = new FormData();
+    formData.append('image', req.file.buffer, {
+      filename: req.file.originalname,
+      contentType: req.file.mimetype,
+      knownLength: req.file.size
+    });
 
-  console.log('Sending request...');
-
-  axios.post(predictionUrl, formData, {
-    headers: {
-      ...formData.getHeaders()
-    },
-    timeout: 120000,
-    maxBodyLength: Infinity,
-    maxContentLength: Infinity,
-    validateStatus: function(status) {
-      return status < 500;
+    // Add optional fields if present
+    if (req.body.symptoms) {
+      formData.append('symptoms', req.body.symptoms);
     }
-  })
-  .then(function(response) {
+    if (req.body.duration) {
+      formData.append('duration', req.body.duration);
+    }
+    if (req.body.severity) {
+      formData.append('severity', req.body.severity);
+    }
+
+    console.log('Sending request to ML model...');
+
+    const response = await axios.post(predictionUrl, formData, {
+      headers: {
+        ...formData.getHeaders(),
+      },
+      timeout: 120000,
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
+    });
+
     console.log('Response Status:', response.status);
     console.log('Response Data:', JSON.stringify(response.data, null, 2));
 
-    // Handle 400 error
-    if (response.status === 400) {
-      console.error('❌ ML MODEL REJECTED REQUEST');
-      console.error('Error data:', response.data);
+    // Check for success field in response
+    if (response.data.success === false) {
       return res.status(400).json({
         success: false,
-        message: 'ML model rejected the image',
-        mlError: response.data,
-        hint: 'Check your HuggingFace Space logs at: https://huggingface.co/spaces/vasavi07/dermadetect-ml-model/logs'
+        message: response.data.error || 'ML model returned an error',
+        mlError: response.data
       });
     }
 
-    if (response.status !== 200) {
-      return res.status(response.status).json({
-        success: false,
-        message: 'ML model error',
-        statusCode: response.status,
-        details: response.data
-      });
-    }
-
-    // Success - parse response
+    // Extract prediction data
     let disease = response.data.prediction || response.data.predicted_class || response.data.disease;
     let confidence = parseFloat(response.data.confidence || 0);
 
+    // Convert percentage to decimal if needed
     if (confidence > 1) {
       confidence = confidence / 100;
     }
@@ -187,6 +189,7 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
     disease = disease.trim();
     console.log('✅ Prediction:', disease, '| Confidence:', confidence);
 
+    // Check confidence threshold
     if (confidence < CONFIDENCE_THRESHOLD) {
       return res.json({
         success: false,
@@ -197,6 +200,7 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
       });
     }
 
+    // Validate disease
     if (!isValidDisease(disease)) {
       return res.json({
         success: false,
@@ -209,6 +213,7 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
 
     const severity = determineSeverity(confidence);
 
+    // Return successful prediction
     return res.json({
       success: true,
       prediction: disease,
@@ -224,12 +229,36 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
       allPredictions: response.data.all_predictions || null,
       modelDetails: response.data.model_details || null
     });
-  })
-  .catch(function(mlError) {
-    console.error('=== REQUEST ERROR ===');
+
+  } catch (mlError) {
+    console.error('=== ML MODEL ERROR ===');
     console.error('Error:', mlError.message);
     console.error('Code:', mlError.code);
     
+    // Handle specific error responses from Flask
+    if (mlError.response) {
+      console.error('Status:', mlError.response.status);
+      console.error('Data:', mlError.response.data);
+      
+      if (mlError.response.status === 400) {
+        return res.status(400).json({
+          success: false,
+          message: 'ML model rejected the image',
+          error: mlError.response.data.error || mlError.response.data,
+          hint: 'The image format may be incompatible. Try a different image.'
+        });
+      }
+      
+      if (mlError.response.status === 500) {
+        return res.status(500).json({
+          success: false,
+          message: 'ML model internal error',
+          error: mlError.response.data.error || mlError.response.data
+        });
+      }
+    }
+    
+    // Handle connection errors
     if (mlError.code === 'ECONNREFUSED') {
       return res.status(503).json({
         success: false,
@@ -242,16 +271,18 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
     if (mlError.code === 'ETIMEDOUT') {
       return res.status(504).json({
         success: false,
-        message: 'ML model timeout'
+        message: 'ML model timeout',
+        hint: 'The model took too long to respond'
       });
     }
 
+    // Generic error
     return res.status(500).json({ 
       success: false,
       message: 'Request failed',
       error: mlError.message
     });
-  });
+  }
 });
 
 module.exports = router;
