@@ -4,41 +4,24 @@ const multer = require('multer');
 const axios = require('axios');
 const FormData = require('form-data');
 
-// Try to import models/middleware
 let Prediction, authMiddleware;
 try {
   Prediction = require('../models/Prediction');
   authMiddleware = require('../middleware/auth');
 } catch (err) {
-  console.warn('⚠️ Missing models:', err.message);
+  console.warn('Missing models:', err.message);
 }
 
-// ============================================================
-// CONFIGURATION
-// ============================================================
 const ML_MODEL_URL = process.env.PREDICTION_MODEL_URL || process.env.ML_MODEL_URL;
 const CONFIDENCE_THRESHOLD = 0.15;
+const VALID_DISEASES = ['acne', 'hyperpigmentation', 'vitiligo', 'sjs', 'melanoma', 'keratosis', 'psoriasis', 'ringworm'];
 
-const VALID_DISEASES = [
-  'acne',
-  'hyperpigmentation',
-  'vitiligo',
-  'sjs',
-  'melanoma',
-  'keratosis',
-  'psoriasis',
-  'ringworm'
-];
+console.log('ML_MODEL_URL:', ML_MODEL_URL);
 
-console.log('🔧 ML_MODEL_URL:', ML_MODEL_URL);
-
-// ============================================================
-// MULTER CONFIG
-// ============================================================
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
+  fileFilter: function(req, file, cb) {
     if (file.mimetype.startsWith('image/')) {
       cb(null, true);
     } else {
@@ -47,10 +30,7 @@ const upload = multer({
   }
 });
 
-// ============================================================
-// OPTIONAL AUTH
-// ============================================================
-const optionalAuth = (req, res, next) => {
+const optionalAuth = function(req, res, next) {
   if (!authMiddleware) {
     req.user = { _id: 'guest' };
     return next();
@@ -58,19 +38,15 @@ const optionalAuth = (req, res, next) => {
   return authMiddleware(req, res, next);
 };
 
-// ============================================================
-// HELPERS
-// ============================================================
 function normalizeDiseaseName(disease) {
   return disease.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
 function isValidDisease(disease) {
   const normalized = normalizeDiseaseName(disease);
-  return VALID_DISEASES.some(valid => 
-    normalizeDiseaseName(valid) === normalized ||
-    normalized.includes(normalizeDiseaseName(valid))
-  );
+  return VALID_DISEASES.some(function(valid) {
+    return normalizeDiseaseName(valid) === normalized || normalized.includes(normalizeDiseaseName(valid));
+  });
 }
 
 function determineSeverity(confidence) {
@@ -79,19 +55,16 @@ function determineSeverity(confidence) {
   return 'mild';
 }
 
-// ============================================================
-// TEST ENDPOINTS
-// ============================================================
-router.get('/test', (req, res) => {
+router.get('/test', function(req, res) {
   res.json({ 
     success: true,
-    message: '✅ Predict route working',
+    message: 'Predict route working',
     mlModelUrl: ML_MODEL_URL,
     configured: !!ML_MODEL_URL
   });
 });
 
-router.get('/test-ml', async (req, res) => {
+router.get('/test-ml', async function(req, res) {
   if (!ML_MODEL_URL) {
     return res.json({
       success: false,
@@ -118,18 +91,14 @@ router.get('/test-ml', async (req, res) => {
     res.json({
       success: false,
       mlModelUrl: ML_MODEL_URL,
-      error: error.message,
-      suggestion: 'Make sure your HuggingFace Space is running'
+      error: error.message
     });
   }
 });
 
-// ============================================================
-// MAIN PREDICTION ENDPOINT
-// ============================================================
-router.post('/', optionalAuth, upload.single('image'), async (req, res) => {
+router.post('/', optionalAuth, upload.single('image'), async function(req, res) {
   try {
-    console.log('📸 Prediction request');
+    console.log('Prediction request');
     
     if (!req.file) {
       return res.status(400).json({ 
@@ -138,12 +107,12 @@ router.post('/', optionalAuth, upload.single('image'), async (req, res) => {
       });
     }
 
-    console.log('📋 File:', req.file.originalname, `${(req.file.size / 1024).toFixed(2)}KB`);
+    console.log('File:', req.file.originalname);
 
     if (!ML_MODEL_URL) {
       return res.status(500).json({
         success: false,
-        message: 'ML Model not configured. Set PREDICTION_MODEL_URL in Railway.'
+        message: 'ML Model not configured'
       });
     }
 
@@ -152,7 +121,7 @@ router.post('/', optionalAuth, upload.single('image'), async (req, res) => {
       predictionUrl += '/predict';
     }
 
-    console.log('🚀 Sending to:', predictionUrl);
+    console.log('Sending to:', predictionUrl);
 
     const formData = new FormData();
     formData.append('file', req.file.buffer, {
@@ -168,22 +137,19 @@ router.post('/', optionalAuth, upload.single('image'), async (req, res) => {
         maxBodyLength: Infinity
       });
     } catch (mlError) {
-      console.error('❌ ML Error:', mlError.message);
+      console.error('ML Error:', mlError.message);
       
       if (mlError.code === 'ECONNREFUSED') {
         return res.status(503).json({
           success: false,
-          message: 'Cannot connect to ML model',
-          details: 'HuggingFace Space may be sleeping. Try again in 30 seconds.',
-          mlUrl: predictionUrl
+          message: 'Cannot connect to ML model'
         });
       }
 
       if (mlError.code === 'ETIMEDOUT') {
         return res.status(504).json({
           success: false,
-          message: 'ML model timeout',
-          details: 'Request took too long. Try again.'
+          message: 'ML model timeout'
         });
       }
 
@@ -198,31 +164,25 @@ router.post('/', optionalAuth, upload.single('image'), async (req, res) => {
       throw mlError;
     }
 
-    console.log('✅ ML Response:', JSON.stringify(response.data).substring(0, 200));
+    console.log('ML Response received');
 
-    let disease = response.data.predicted_class || 
-                  response.data.prediction || 
-                  response.data.disease ||
-                  response.data.class;
-    
+    let disease = response.data.predicted_class || response.data.prediction || response.data.disease || response.data.class;
     let confidence = parseFloat(response.data.confidence || 0);
 
     if (!disease) {
       return res.status(500).json({
         success: false,
-        message: 'Invalid ML response',
-        rawResponse: response.data
+        message: 'Invalid ML response'
       });
     }
 
     disease = disease.trim();
-    console.log(`🔍 Result: "${disease}" (${(confidence * 100).toFixed(1)}%)`);
+    console.log('Result:', disease, confidence);
 
     if (confidence < CONFIDENCE_THRESHOLD) {
-      console.warn(`⚠️ Low confidence: ${(confidence * 100).toFixed(1)}%`);
       return res.status(200).json({
         success: false,
-        message: `Confidence too low (${(confidence * 100).toFixed(1)}%).\n\nTips:\n• Better lighting\n• Clearer photo\n• Closer view\n• Consult a dermatologist`,
+        message: 'Confidence too low',
         confidence: confidence,
         predictedDisease: disease,
         belowThreshold: true
@@ -230,10 +190,9 @@ router.post('/', optionalAuth, upload.single('image'), async (req, res) => {
     }
 
     if (!isValidDisease(disease)) {
-      console.warn(`⚠️ Invalid disease: "${disease}"`);
       return res.status(200).json({
         success: false,
-        message: `"${disease}" not in trained database.\n\nTrained: ${VALID_DISEASES.join(', ')}\n\nConsult a dermatologist.`,
+        message: 'Disease not in trained database',
         detectedClass: disease,
         confidence: confidence,
         invalidClass: true
@@ -241,8 +200,8 @@ router.post('/', optionalAuth, upload.single('image'), async (req, res) => {
     }
 
     const severity = determineSeverity(confidence);
-
     let predictionId = null;
+
     if (Prediction && req.user && req.user._id !== 'guest') {
       try {
         const prediction = new Prediction({
@@ -260,9 +219,9 @@ router.post('/', optionalAuth, upload.single('image'), async (req, res) => {
 
         await prediction.save();
         predictionId = prediction._id;
-        console.log('✅ Saved:', predictionId);
+        console.log('Saved:', predictionId);
       } catch (dbError) {
-        console.error('⚠️ DB Error:', dbError.message);
+        console.error('DB Error:', dbError.message);
       }
     }
 
@@ -272,18 +231,12 @@ router.post('/', optionalAuth, upload.single('image'), async (req, res) => {
       confidence: confidence,
       severity: severity,
       predictionId: predictionId,
-      description: `Detected: ${disease} (${(confidence * 100).toFixed(1)}% confidence)`,
-      recommendations: [
-        'Monitor the condition',
-        'Keep area clean',
-        'Avoid scratching',
-        'Consult a dermatologist'
-      ]
+      description: 'Detected: ' + disease,
+      recommendations: ['Monitor the condition', 'Keep area clean', 'Avoid scratching', 'Consult a dermatologist']
     });
 
   } catch (error) {
-    console.error('❌ Error:', error.message);
-    console.error('Stack:', error.stack);
+    console.error('Error:', error.message);
     
     res.status(500).json({ 
       success: false,
@@ -293,78 +246,37 @@ router.post('/', optionalAuth, upload.single('image'), async (req, res) => {
   }
 });
 
-// ============================================================
-// HISTORY ROUTES
-// ============================================================
 if (Prediction && authMiddleware) {
-  router.get('/history', authMiddleware, async (req, res) => {
+  router.get('/history', authMiddleware, async function(req, res) {
     try {
-      const predictions = await Prediction.find({ userId: req.user._id })
-        .sort({ createdAt: -1 })
-        .limit(50);
-
-      res.json({
-        success: true,
-        predictions: predictions
-      });
+      const predictions = await Prediction.find({ userId: req.user._id }).sort({ createdAt: -1 }).limit(50);
+      res.json({ success: true, predictions: predictions });
     } catch (error) {
-      res.status(500).json({
-        success: false,
-        message: 'Failed to fetch history',
-        error: error.message
-      });
+      res.status(500).json({ success: false, message: 'Failed to fetch history', error: error.message });
     }
   });
 
-  router.get('/:id', authMiddleware, async (req, res) => {
+  router.get('/:id', authMiddleware, async function(req, res) {
     try {
-      const prediction = await Prediction.findOne({
-        _id: req.params.id,
-        userId: req.user._id
-      });
-
+      const prediction = await Prediction.findOne({ _id: req.params.id, userId: req.user._id });
       if (!prediction) {
-        return res.status(404).json({
-          success: false,
-          message: 'Not found'
-        });
+        return res.status(404).json({ success: false, message: 'Not found' });
       }
-
-      res.json({
-        success: true,
-        prediction: prediction
-      });
+      res.json({ success: true, prediction: prediction });
     } catch (error) {
-      res.status(500).json({
-        success: false,
-        error: error.message
-      });
+      res.status(500).json({ success: false, error: error.message });
     }
   });
 
-  router.delete('/:id', authMiddleware, async (req, res) => {
+  router.delete('/:id', authMiddleware, async function(req, res) {
     try {
-      const prediction = await Prediction.findOneAndDelete({
-        _id: req.params.id,
-        userId: req.user._id
-      });
-
+      const prediction = await Prediction.findOneAndDelete({ _id: req.params.id, userId: req.user._id });
       if (!prediction) {
-        return res.status(404).json({
-          success: false,
-          message: 'Not found'
-        });
+        return res.status(404).json({ success: false, message: 'Not found' });
       }
-
-      res.json({
-        success: true,
-        message: 'Deleted'
-      });
+      res.json({ success: true, message: 'Deleted' });
     } catch (error) {
-      res.status(500).json({
-        success: false,
-        error: error.message
-      });
+      res.status(500).json({ success: false, error: error.message });
     }
   });
 }
