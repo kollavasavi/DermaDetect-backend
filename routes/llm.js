@@ -1,8 +1,9 @@
-// routes/llm.js – FINAL TINYLLAMA VERSION (2 MIN TIMEOUT + AUTO RESPONSE SUPPORT)
+// routes/llm.js – FIXED VERSION WITH OBJECTID VALIDATION
 
 const express = require("express");
 const router = express.Router();
 const axios = require("axios");
+const mongoose = require("mongoose"); // <-- ADD THIS
 const Prediction = require("../models/Prediction");
 const authMiddleware = require("../middleware/auth");
 
@@ -117,12 +118,24 @@ router.post("/advice", authMiddleware, async (req, res) => {
       confidence
     );
 
-    // Save to DB
+    // Save to DB - WITH OBJECTID VALIDATION
     if (predictionId) {
-      await Prediction.findByIdAndUpdate(predictionId, {
-        advice,
-        adviceGeneratedAt: new Date(),
-      });
+      // Check if predictionId is a valid MongoDB ObjectId
+      if (mongoose.Types.ObjectId.isValid(predictionId)) {
+        try {
+          await Prediction.findByIdAndUpdate(predictionId, {
+            advice,
+            adviceGeneratedAt: new Date(),
+          });
+          console.log("✅ Advice saved to prediction:", predictionId);
+        } catch (dbError) {
+          console.error("⚠️ Failed to save advice to DB:", dbError.message);
+          // Continue anyway - advice generation succeeded
+        }
+      } else {
+        console.warn("⚠️ Invalid predictionId format:", predictionId);
+        // Don't fail the request - just skip the DB update
+      }
     }
 
     res.json({
