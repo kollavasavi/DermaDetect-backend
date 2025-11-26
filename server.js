@@ -3,7 +3,6 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 
-// Load .env ONLY in local development
 if (process.env.NODE_ENV !== 'production') {
   require('dotenv').config();
 }
@@ -42,7 +41,7 @@ mongoose.connect(MONGODB_URI)
   .catch(err => console.error("❌ MongoDB Error:", err.message));
 
 // =======================================================
-// Routes
+// Routes with error handling
 // =======================================================
 try {
   app.use('/api/auth', require('./routes/auth'));
@@ -73,8 +72,7 @@ try {
 }
 
 try {
-  const llmRoutes = require('./routes/llm');
-  app.use('/api/llm', llmRoutes);
+  app.use('/api/llm', require('./routes/llm'));
   console.log('✅ LLM routes loaded');
 } catch (err) {
   console.error('❌ LLM routes error:', err.message);
@@ -90,7 +88,6 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Root
 app.get('/', (req, res) => {
   res.json({
     success: true,
