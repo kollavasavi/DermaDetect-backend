@@ -3,7 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const axios = require('axios');
 const FormData = require('form-data');
-const stream = require('stream');
+const { Readable } = require('stream');
 
 // Models/Middleware (optional)
 let Prediction = null;
@@ -133,7 +133,7 @@ router.get('/test-ml', function(req, res) {
   });
 });
 
-// Main prediction endpoint - FIXED VERSION
+// Main prediction endpoint - FIXED WITH READABLE STREAM
 router.post('/', optionalAuth, upload.single('image'), function(req, res) {
   console.log('=== PREDICTION REQUEST START ===');
   console.log('File received:', req.file ? req.file.originalname : 'NONE');
@@ -158,34 +158,69 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
   }
 
   console.log('Target URL:', predictionUrl);
-  console.log('File size:', req.file.size);
-  console.log('File type:', req.file.mimetype);
+  console.log('File details:');
+  console.log('  - Original name:', req.file.originalname);
+  console.log('  - Size:', req.file.size, 'bytes');
+  console.log('  - MIME type:', req.file.mimetype);
 
-  // ✅ CRITICAL FIX: Create a readable stream from buffer
-  // This is the proper way to send buffers in multipart form-data
-  const bufferStream = new stream.PassThrough();
-  bufferStream.end(req.file.buffer);
+  // ✅ CRITICAL FIX: Create Readable stream from buffer
+  // This is what Flask's request.files expects
+  const readableStream = Readable.from(req.file.buffer);
 
-  // Create FormData with the stream
+  // Create FormData
   const formData = new FormData();
-  formData.append('image', bufferStream, {
+  formData.append('image', readableStream, {
     filename: req.file.originalname,
-    contentType: req.file.mimetype
+    contentType: req.file.mimetype,
+    knownLength: req.file.size
   });
 
-  console.log('FormData created with PassThrough stream');
+  console.log('FormData created with Readable stream');
+  console.log('Sending POST request to ML model...');
 
-  axios.post(predictionUrl, formData, {
-    headers: formData.getHeaders(),
+  // Send the request
+  axios({
+    method: 'POST',
+    url: predictionUrl,
+    data: formData,
+    headers: {
+      ...formData.getHeaders()
+    },
     timeout: 120000,
     maxBodyLength: Infinity,
-    maxContentLength: Infinity
+    maxContentLength: Infinity,
+    validateStatus: function(status) {
+      return status < 500; // Don't throw on 4xx errors
+    }
   })
   .then(function(response) {
-    console.log('=== ML RESPONSE SUCCESS ===');
-    console.log('Status:', response.status);
-    console.log('Data:', JSON.stringify(response.data));
+    console.log('=== ML RESPONSE RECEIVED ===');
+    console.log('Status Code:', response.status);
+    console.log('Response Headers:', JSON.stringify(response.headers));
+    console.log('Response Data:', JSON.stringify(response.data));
 
+    // Handle non-200 responses
+    if (response.status === 400) {
+      console.error('400 Bad Request - ML model rejected the request');
+      console.error('This usually means the image field was not received correctly');
+      return res.status(400).json({
+        success: false,
+        message: 'ML model rejected the image',
+        details: response.data,
+        hint: 'The ML model expects multipart/form-data with an "image" field'
+      });
+    }
+
+    if (response.status !== 200) {
+      return res.status(response.status).json({
+        success: false,
+        message: 'ML model returned error',
+        statusCode: response.status,
+        details: response.data
+      });
+    }
+
+    // Parse the successful response
     let disease = response.data.prediction || response.data.predicted_class || response.data.disease;
     let confidence = parseFloat(response.data.confidence || 0);
 
@@ -204,8 +239,9 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
     }
 
     disease = disease.trim();
-    console.log('Detected:', disease, 'Confidence:', confidence);
+    console.log('✅ Detected:', disease, '| Confidence:', confidence);
 
+    // Check confidence threshold
     if (confidence < CONFIDENCE_THRESHOLD) {
       return res.json({
         success: false,
@@ -216,6 +252,7 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
       });
     }
 
+    // Validate disease
     if (!isValidDisease(disease)) {
       return res.json({
         success: false,
@@ -247,13 +284,14 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
       newPrediction.save()
         .then(function(saved) {
           predictionId = saved._id;
-          console.log('Prediction saved:', predictionId);
+          console.log('Prediction saved to database:', predictionId);
         })
         .catch(function(dbError) {
-          console.error('DB Error:', dbError.message);
+          console.error('DB Save Error:', dbError.message);
         });
     }
 
+    // Return successful response
     return res.json({
       success: true,
       prediction: disease,
@@ -265,37 +303,31 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
         'Consult a dermatologist for proper diagnosis',
         'Monitor the condition closely',
         'Keep the affected area clean and dry',
-        'Avoid scratching or touching the area'
+        'Avoid scratching or irritating the area',
+        'Take photos to track progression'
       ],
       allPredictions: response.data.all_predictions || null,
       modelDetails: response.data.model_details || null
     });
   })
   .catch(function(mlError) {
-    console.error('=== ML ERROR ===');
-    console.error('Message:', mlError.message);
-    console.error('Code:', mlError.code);
+    console.error('=== ML REQUEST ERROR ===');
+    console.error('Error Type:', mlError.code || 'UNKNOWN');
+    console.error('Error Message:', mlError.message);
     
     if (mlError.response) {
-      console.error('Status:', mlError.response.status);
-      console.error('Response:', JSON.stringify(mlError.response.data));
-      
-      return res.status(mlError.response.status).json({
-        success: false,
-        message: 'ML model error',
-        statusCode: mlError.response.status,
-        error: mlError.response.data,
-        hint: mlError.response.status === 400 ? 
-          'The ML model rejected the image format. Please ensure the image is valid.' : null
-      });
+      console.error('Response Status:', mlError.response.status);
+      console.error('Response Data:', JSON.stringify(mlError.response.data));
     }
 
+    // Handle different error types
     if (mlError.code === 'ECONNREFUSED') {
       return res.status(503).json({
         success: false,
         message: 'Cannot connect to ML model',
-        details: 'HuggingFace Space may be sleeping. Visit the space URL to wake it up.',
-        spaceUrl: 'https://vasavi07-dermadetect-ml-model.hf.space'
+        details: 'HuggingFace Space may be sleeping or unavailable',
+        spaceUrl: 'https://vasavi07-dermadetect-ml-model.hf.space',
+        hint: 'Visit the space URL to wake it up, then try again'
       });
     }
 
@@ -303,14 +335,26 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
       return res.status(504).json({
         success: false,
         message: 'ML model timeout',
-        details: 'Request took longer than 2 minutes'
+        details: 'Request took longer than 2 minutes',
+        hint: 'The image might be too large or the model is overloaded'
       });
     }
 
+    if (mlError.code === 'ENOTFOUND') {
+      return res.status(503).json({
+        success: false,
+        message: 'ML model URL not found',
+        details: 'Cannot resolve the HuggingFace Space URL',
+        configuredUrl: ML_MODEL_URL
+      });
+    }
+
+    // Generic error
     return res.status(500).json({ 
       success: false,
-      message: 'Prediction failed',
-      error: mlError.message
+      message: 'Prediction request failed',
+      error: mlError.message,
+      code: mlError.code
     });
   });
 });
