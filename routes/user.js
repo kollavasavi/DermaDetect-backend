@@ -1,4 +1,4 @@
-// routes/user.js
+// routes/user.js - FIXED
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
@@ -10,7 +10,8 @@ const authMiddleware = require('../middleware/auth');
 // @access  Private
 router.get('/profile', authMiddleware, async (req, res) => {
   try {
-    const user = await User.findById(req.userId).select('-password');
+    // FIXED: Use req.user._id instead of req.userId
+    const user = await User.findById(req.user._id).select('-password');
     
     if (!user) {
       return res.status(404).json({ 
@@ -23,7 +24,6 @@ router.get('/profile', authMiddleware, async (req, res) => {
       success: true,
       user
     });
-
   } catch (error) {
     console.error('Get profile error:', error);
     res.status(500).json({ 
@@ -40,8 +40,9 @@ router.get('/profile', authMiddleware, async (req, res) => {
 router.put('/profile', authMiddleware, async (req, res) => {
   try {
     const { name, age, gender, phone, profilePicture } = req.body;
-
-    const user = await User.findById(req.userId);
+    
+    // FIXED: Use req.user._id instead of req.userId
+    const user = await User.findById(req.user._id);
     
     if (!user) {
       return res.status(404).json({ 
@@ -72,7 +73,6 @@ router.put('/profile', authMiddleware, async (req, res) => {
         profilePicture: user.profilePicture
       }
     });
-
   } catch (error) {
     console.error('Update profile error:', error);
     res.status(500).json({ 
@@ -88,7 +88,8 @@ router.put('/profile', authMiddleware, async (req, res) => {
 // @access  Private
 router.get('/history', authMiddleware, async (req, res) => {
   try {
-    const predictions = await Prediction.find({ userId: req.userId })
+    // FIXED: Use req.user._id instead of req.userId
+    const predictions = await Prediction.find({ userId: req.user._id })
       .sort({ createdAt: -1 })
       .limit(50);
 
@@ -97,7 +98,6 @@ router.get('/history', authMiddleware, async (req, res) => {
       count: predictions.length,
       predictions
     });
-
   } catch (error) {
     console.error('Get history error:', error);
     res.status(500).json({ 
