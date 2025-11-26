@@ -128,6 +128,55 @@ router.post('/test-upload', upload.single('image'), function(req, res) {
   });
 });
 
+// DEBUG: Test direct ML model connection
+router.post('/test-ml-direct', upload.single('image'), function(req, res) {
+  if (!req.file) {
+    return res.status(400).json({ success: false, message: 'No file' });
+  }
+  
+  if (!ML_MODEL_URL) {
+    return res.status(500).json({ success: false, message: 'ML_MODEL_URL not set' });
+  }
+
+  const predictionUrl = ML_MODEL_URL.includes('/predict') ? ML_MODEL_URL : ML_MODEL_URL + '/predict';
+  
+  console.log('=== DIRECT ML TEST ===');
+  console.log('URL:', predictionUrl);
+  console.log('File:', req.file.originalname, req.file.size, 'bytes');
+  
+  // Test with raw buffer
+  const formData = new FormData();
+  formData.append('image', req.file.buffer, {
+    filename: req.file.originalname,
+    contentType: req.file.mimetype
+  });
+  
+  axios.post(predictionUrl, formData, {
+    headers: formData.getHeaders(),
+    timeout: 60000,
+    validateStatus: () => true // Don't throw on any status
+  })
+  .then(function(response) {
+    console.log('ML Response Status:', response.status);
+    console.log('ML Response Data:', JSON.stringify(response.data));
+    
+    return res.json({
+      success: response.status === 200,
+      mlStatus: response.status,
+      mlResponse: response.data,
+      message: response.status === 200 ? 'ML model working!' : 'ML model returned error'
+    });
+  })
+  .catch(function(error) {
+    console.error('ML Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+      code: error.code
+    });
+  });
+});
+
 // ML test endpoint
 router.get('/test-ml', function(req, res) {
   if (!ML_MODEL_URL) {
@@ -190,20 +239,20 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
   console.log('  - Original name:', req.file.originalname);
   console.log('  - Size:', req.file.size, 'bytes');
   console.log('  - MIME type:', req.file.mimetype);
+  console.log('  - Buffer length:', req.file.buffer.length);
 
-  // ✅ CRITICAL FIX: Create Readable stream from buffer
-  // This is what Flask's request.files expects
-  const readableStream = Readable.from(req.file.buffer);
-
-  // Create FormData
+  // ✅ TRY MULTIPLE APPROACHES - Flask can be picky about multipart data
+  
+  // Approach 1: Direct buffer with proper metadata (most compatible with Flask)
   const formData = new FormData();
-  formData.append('image', readableStream, {
+  formData.append('image', req.file.buffer, {
     filename: req.file.originalname,
     contentType: req.file.mimetype,
     knownLength: req.file.size
   });
 
-  console.log('FormData created with Readable stream');
+  console.log('FormData created with direct buffer');
+  console.log('FormData headers:', formData.getHeaders());
   console.log('Sending POST request to ML model...');
 
   // Send the request
