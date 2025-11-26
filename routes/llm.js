@@ -1,148 +1,159 @@
-// routes/llm.js – FINAL TINYLLAMA WORKING VERSION
+// routes/llm.js – FINAL TINYLLAMA VERSION (2 MIN TIMEOUT + AUTO RESPONSE SUPPORT)
 
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const axios = require('axios');
-const Prediction = require('../models/Prediction');
-const authMiddleware = require('../middleware/auth');
+const axios = require("axios");
+const Prediction = require("../models/Prediction");
+const authMiddleware = require("../middleware/auth");
 
 // ============================================================
-// Load TinyLlama Space URL from Railway
+// Load HuggingFace Space URL
 // ============================================================
 const LLM_URL = process.env.LLM_URL;
 
-console.log("========================================");
-console.log("🚀 LLM System Initialized");
+console.log("==================================");
 console.log("🔥 Using TinyLlama at:", LLM_URL);
-console.log("========================================");
+console.log("==================================");
 
 if (!LLM_URL) {
-    console.error("❌ ERROR: LLM_URL is NOT SET in Railway");
+  console.error("❌ ERROR: LLM_URL NOT SET IN RAILWAY!");
 }
 
 // ============================================================
-// Build medical advice prompt
+// Build prompt for TinyLlama
 // ============================================================
 function buildPrompt(disease, symptoms, severity, duration, confidence) {
-    const conf = confidence ? (confidence * 100).toFixed(0) : "N/A";
-
-    return `
+  return `
 You are a dermatology medical assistant.
 
 Condition: ${disease}
 Symptoms: ${symptoms || "Not provided"}
 Severity: ${severity || "Not provided"}
 Duration: ${duration || "Not provided"}
-AI Confidence: ${conf}%
+Confidence: ${(confidence * 100).toFixed(0)}%
 
-Write a helpful, medically accurate explanation under these sections:
+Write a clear, safe explanation using:
 
-### 1️⃣ Overview  
-### 2️⃣ Causes  
-### 3️⃣ Symptoms  
-### 4️⃣ Safe Home Care  
-### 5️⃣ Dermatologist Treatments  
-### 6️⃣ When To Seek Medical Help  
-### 7️⃣ Prevention Tips  
+1. What the condition is  
+2. Common symptoms  
+3. Causes  
+4. Safe home care  
+5. Dermatologist treatments  
+6. When to see a doctor  
+7. Prevention tips  
 
-Keep language simple and safe.
 End with: "⚠️ AI-generated advice. Consult a dermatologist."
 `;
 }
 
 // ============================================================
-// Call TinyLlama HF Space
+// CALL TINYLLAMA (FULL 120s TIMEOUT + wait_for_model)
 // ============================================================
 async function callTinyLlama(prompt) {
-    console.log("📩 Sending prompt to TinyLlama…");
+  console.log("💬 Sending prompt to TinyLlama...");
 
+  try {
     const response = await axios.post(
-        LLM_URL,
-        { text: prompt },
-        {
-            headers: { "Content-Type": "application/json" },
-            timeout: 45000, // 45s timeout
-        }
+      LLM_URL,
+      { text: prompt, wait_for_model: true },
+      {
+        headers: { "Content-Type": "application/json" },
+        timeout: 120000, // <-- 2 MINUTES
+      }
     );
 
-    if (!response.data || !response.data.response) {
-        console.error("❌ Invalid LLM response:", response.data);
-        throw new Error("Invalid response from TinyLlama Space.");
+    console.log("📩 Raw HF Response:", response.data);
+
+    // SUPPORT ALL COMMON SPACE FORMATS
+    if (response.data?.response) {
+      return response.data.response.trim();
     }
 
-    console.log("✅ TinyLlama reply received:", response.data.response.length, "chars");
-    return response.data.response.trim();
+    if (response.data?.generated_text) {
+      return response.data.generated_text.trim();
+    }
+
+    if (Array.isArray(response.data) && response.data[0]?.generated_text) {
+      return response.data[0].generated_text.trim();
+    }
+
+    throw new Error("Unrecognized TinyLlama response format");
+
+  } catch (err) {
+    console.error("❌ TinyLlama ERROR:", err.message);
+    throw err;
+  }
 }
 
 // ============================================================
-// Generate Advice Wrapper
+// Generate medical advice
 // ============================================================
 async function generateAdvice(disease, symptoms, severity, duration, confidence) {
-    const prompt = buildPrompt(disease, symptoms, severity, duration, confidence);
-    return await callTinyLlama(prompt);
+  const prompt = buildPrompt(disease, symptoms, severity, duration, confidence);
+  return await callTinyLlama(prompt);
 }
 
 // ============================================================
 // POST /api/llm/advice
 // ============================================================
-router.post('/advice', authMiddleware, async (req, res) => {
-    try {
-        const { disease, symptoms, severity, duration, predictionId, confidence } = req.body;
+router.post("/advice", authMiddleware, async (req, res) => {
+  try {
+    const { disease, symptoms, severity, duration, predictionId, confidence } =
+      req.body;
 
-        if (!disease) {
-            return res.status(400).json({
-                success: false,
-                message: "Disease is required"
-            });
-        }
-
-        console.log("🧠 Generating advice for:", disease);
-
-        const advice = await generateAdvice(
-            disease,
-            symptoms,
-            severity,
-            duration,
-            confidence
-        );
-
-        // Save advice to prediction
-        if (predictionId) {
-            await Prediction.findByIdAndUpdate(predictionId, {
-                advice,
-                adviceGeneratedAt: new Date(),
-            });
-        }
-
-        res.json({
-            success: true,
-            advice,
-            metadata: {
-                model: "TinyLlama HF Space",
-                llm_url: LLM_URL,
-                generated_at: new Date(),
-            }
-        });
-
-    } catch (err) {
-        console.error("❌ LLM Error:", err.message);
-        res.status(500).json({
-            success: false,
-            message: "Failed to generate advice",
-            error: err.message,
-        });
+    if (!disease) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Disease is required" });
     }
+
+    console.log("🔥 Generating advice for:", disease);
+
+    const advice = await generateAdvice(
+      disease,
+      symptoms,
+      severity,
+      duration,
+      confidence
+    );
+
+    // Save to DB
+    if (predictionId) {
+      await Prediction.findByIdAndUpdate(predictionId, {
+        advice,
+        adviceGeneratedAt: new Date(),
+      });
+    }
+
+    res.json({
+      success: true,
+      advice,
+      metadata: {
+        model: "TinyLlama HF Space",
+        llm_url: LLM_URL,
+        generated_at: new Date(),
+      },
+    });
+  } catch (err) {
+    console.error("❌ LLM ERROR:", err.message);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to generate advice",
+      error: err.message,
+    });
+  }
 });
 
 // ============================================================
 // GET /api/llm/health
 // ============================================================
-router.get('/health', (req, res) => {
-    res.json({
-        success: true,
-        llm_url: LLM_URL,
-        configured: !!LLM_URL
-    });
+router.get("/health", (req, res) => {
+  res.json({
+    success: true,
+    llm_url: LLM_URL,
+    configured: !!LLM_URL,
+  });
 });
 
 module.exports = router;
