@@ -3,6 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const axios = require('axios');
 const FormData = require('form-data');
+const stream = require('stream');
 
 // Models/Middleware (optional)
 let Prediction = null;
@@ -132,9 +133,10 @@ router.get('/test-ml', function(req, res) {
   });
 });
 
-// Main prediction endpoint
+// Main prediction endpoint - FIXED VERSION
 router.post('/', optionalAuth, upload.single('image'), function(req, res) {
-  console.log('Prediction request received');
+  console.log('=== PREDICTION REQUEST START ===');
+  console.log('File received:', req.file ? req.file.originalname : 'NONE');
   
   if (!req.file) {
     return res.status(400).json({ 
@@ -142,10 +144,6 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
       message: 'No image uploaded' 
     });
   }
-
-  console.log('File received:', req.file.originalname);
-  console.log('File size:', req.file.size, 'bytes');
-  console.log('File type:', req.file.mimetype);
 
   if (!ML_MODEL_URL) {
     return res.status(500).json({
@@ -155,46 +153,40 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
   }
 
   let predictionUrl = ML_MODEL_URL;
-  if (predictionUrl.includes('/predict') === false) {
+  if (!predictionUrl.includes('/predict')) {
     predictionUrl = predictionUrl + '/predict';
   }
 
-  console.log('Sending to ML model:', predictionUrl);
+  console.log('Target URL:', predictionUrl);
+  console.log('File size:', req.file.size);
+  console.log('File type:', req.file.mimetype);
 
-  // ✅ CRITICAL FIX: Create FormData with proper content type and file stream
+  // ✅ CRITICAL FIX: Create a readable stream from buffer
+  // This is the proper way to send buffers in multipart form-data
+  const bufferStream = new stream.PassThrough();
+  bufferStream.end(req.file.buffer);
+
+  // Create FormData with the stream
   const formData = new FormData();
-  
-  // Append the file buffer directly with explicit options
-  formData.append('image', req.file.buffer, {
+  formData.append('image', bufferStream, {
     filename: req.file.originalname,
-    contentType: req.file.mimetype,
-    knownLength: req.file.size
+    contentType: req.file.mimetype
   });
 
-  // Get form headers (important for multipart/form-data)
-  const formHeaders = formData.getHeaders();
-  
-  console.log('Form headers:', formHeaders);
-  console.log('FormData boundary:', formHeaders['content-type']);
+  console.log('FormData created with PassThrough stream');
 
-  axios({
-    method: 'post',
-    url: predictionUrl,
-    data: formData,
-    headers: {
-      ...formHeaders
-    },
+  axios.post(predictionUrl, formData, {
+    headers: formData.getHeaders(),
     timeout: 120000,
     maxBodyLength: Infinity,
     maxContentLength: Infinity
   })
   .then(function(response) {
-    console.log('ML Response received');
-    console.log('Response status:', response.status);
-    console.log('Response data:', JSON.stringify(response.data));
+    console.log('=== ML RESPONSE SUCCESS ===');
+    console.log('Status:', response.status);
+    console.log('Data:', JSON.stringify(response.data));
 
-    // Your ML model returns: { success: true, prediction: "Acne", confidence: 85.5, ... }
-    let disease = response.data.prediction || response.data.predicted_class || response.data.disease || response.data.class;
+    let disease = response.data.prediction || response.data.predicted_class || response.data.disease;
     let confidence = parseFloat(response.data.confidence || 0);
 
     // Convert confidence from percentage to decimal if needed
@@ -203,7 +195,7 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
     }
 
     if (!disease) {
-      console.error('No disease found in response:', response.data);
+      console.error('No disease found in response');
       return res.status(500).json({
         success: false,
         message: 'Invalid ML response - no disease prediction',
@@ -215,7 +207,7 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
     console.log('Detected:', disease, 'Confidence:', confidence);
 
     if (confidence < CONFIDENCE_THRESHOLD) {
-      return res.status(200).json({
+      return res.json({
         success: false,
         message: 'Confidence too low',
         confidence: confidence,
@@ -225,7 +217,7 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
     }
 
     if (!isValidDisease(disease)) {
-      return res.status(200).json({
+      return res.json({
         success: false,
         message: 'Disease not in trained database',
         detectedClass: disease,
@@ -237,6 +229,7 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
     const severity = determineSeverity(confidence);
     let predictionId = null;
 
+    // Save to database if available
     if (Prediction && req.user && req.user._id !== 'guest') {
       const newPrediction = new Prediction({
         userId: req.user._id,
@@ -269,29 +262,40 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
       predictionId: predictionId,
       description: response.data.description || 'Detected: ' + disease,
       recommendations: response.data.recommendations || [
-        'Monitor the condition', 
-        'Keep area clean', 
-        'Avoid scratching', 
-        'Consult a dermatologist if symptoms persist'
+        'Consult a dermatologist for proper diagnosis',
+        'Monitor the condition closely',
+        'Keep the affected area clean and dry',
+        'Avoid scratching or touching the area'
       ],
       allPredictions: response.data.all_predictions || null,
       modelDetails: response.data.model_details || null
     });
   })
   .catch(function(mlError) {
-    console.error('ML Error:', mlError.message);
-    console.error('ML Error Code:', mlError.code);
+    console.error('=== ML ERROR ===');
+    console.error('Message:', mlError.message);
+    console.error('Code:', mlError.code);
     
     if (mlError.response) {
-      console.error('ML Error Status:', mlError.response.status);
-      console.error('ML Error Data:', JSON.stringify(mlError.response.data));
+      console.error('Status:', mlError.response.status);
+      console.error('Response:', JSON.stringify(mlError.response.data));
+      
+      return res.status(mlError.response.status).json({
+        success: false,
+        message: 'ML model error',
+        statusCode: mlError.response.status,
+        error: mlError.response.data,
+        hint: mlError.response.status === 400 ? 
+          'The ML model rejected the image format. Please ensure the image is valid.' : null
+      });
     }
-    
+
     if (mlError.code === 'ECONNREFUSED') {
       return res.status(503).json({
         success: false,
         message: 'Cannot connect to ML model',
-        details: 'HuggingFace Space may be sleeping. Please visit https://vasavi07-dermadetect-ml-model.hf.space to wake it up.'
+        details: 'HuggingFace Space may be sleeping. Visit the space URL to wake it up.',
+        spaceUrl: 'https://vasavi07-dermadetect-ml-model.hf.space'
       });
     }
 
@@ -300,16 +304,6 @@ router.post('/', optionalAuth, upload.single('image'), function(req, res) {
         success: false,
         message: 'ML model timeout',
         details: 'Request took longer than 2 minutes'
-      });
-    }
-
-    if (mlError.response) {
-      return res.status(mlError.response.status).json({
-        success: false,
-        message: 'ML model error',
-        statusCode: mlError.response.status,
-        details: mlError.response.data,
-        hint: mlError.response.status === 400 ? 'ML model rejected the request format' : null
       });
     }
 
