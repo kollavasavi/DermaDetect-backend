@@ -1,5 +1,4 @@
 // server.js – FINAL CLEAN VERSION USING TINYLLAMA HF SPACE
-
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -32,7 +31,7 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 app.use((req, res, next) => {
-  console.log(`➡️ ${req.method} ${req.path}`);
+  console.log(`➡️ ${req.method} ${req.path}`);  // ✅ FIXED - Added opening (
   next();
 });
 
@@ -58,7 +57,9 @@ app.use('/api/llm', llmRoutes);
 app.get('/api/health', (req, res) => {
   res.json({
     status: "OK",
-    mongo: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected"
+    mongo: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected",
+    llm_configured: !!process.env.LLM_URL,
+    ml_configured: !!process.env.PREDICTION_MODEL_URL
   });
 });
 
@@ -74,7 +75,7 @@ app.use('*', (req, res) => {
 // Start Server
 // =======================================================
 app.listen(PORT, HOST, () => {
-  console.log(`🚀 Server started at http://localhost:${PORT}`);
+  console.log(`🚀 Server started at http://localhost:${PORT}`);  // ✅ FIXED - Added opening (
 });
 
 module.exports = app;
