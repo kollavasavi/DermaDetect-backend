@@ -6,41 +6,52 @@
   <link rel="icon" href="/favicon.ico" />
 
   <meta name="viewport"
-    content="width=device-width,initial-scale=1,maximum-scale=5,user-scalable=yes,viewport-fit=cover" />
+    content="width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes, viewport-fit=cover" />
 
   <meta name="theme-color" content="#4f46e5" />
   <meta name="description"
     content="AI-powered skin disease detection with personalized medical advice and machine learning analysis" />
 
+  <!-- PWA ICON -->
   <link rel="apple-touch-icon" href="/android-chrome-192x192.png" />
+
+  <!-- PWA SETTINGS -->
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="DermaDetect" />
 
-  <!-- REQUIRED FOR INSTALL BUTTON -->
+  <!-- MANIFEST REQUIRED FOR INSTALL -->
   <link rel="manifest" href="/manifest.json" />
 
   <title>DermaDetect - Skin Analysis</title>
 
-  <script defer="defer" src="/static/js/main.2969366e.js"></script>
-  <link href="/static/css/main.82c77926.css" rel="stylesheet">
+  <!-- React will auto-inject hashed JS/CSS -->
 </head>
 
 <body>
   <noscript>You need to enable JavaScript to run this app.</noscript>
   <div id="root"></div>
 
-  <!-- ⭐ REQUIRED: SERVICE WORKER REGISTER ⭐ -->
+  <!-- ⭐ SERVICE WORKER REGISTRATION ⭐ -->
   <script>
     if ("serviceWorker" in navigator) {
-      window.addEventListener("load", function () {
+      window.addEventListener("load", () => {
         navigator.serviceWorker
           .register("/service-worker.js")
-          .then(() => console.log("Service Worker Registered ✔"))
+          .then((reg) => {
+            console.log("Service Worker Registered ✔", reg);
+
+            // Handle SKIP_WAITING for updates
+            if (reg.waiting) {
+              reg.waiting.postMessage({ type: "SKIP_WAITING" });
+            }
+          })
           .catch((err) => console.error("SW Registration Failed ❌", err));
       });
     }
   </script>
+
+  <!-- React Build Scripts Injected Automatically -->
 </body>
 
 </html>
